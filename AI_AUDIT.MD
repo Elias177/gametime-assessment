@@ -123,3 +123,82 @@ Log of what was asked and the results, one entry per task.
 | payment_failed | active / price_changed | — | expired | unavailable | payment_pending | — | — |
 
 **Next:** Waiting for the next task. Likely candidate: the web UI for starting, resuming and completing a session.
+
+
+## Task 5: Harden `POST /api/sessions/:id/complete`
+
+**Asked:** Require an `Idempotency-Key` header and the client's `version`. Same key returns the same order. Stale version returns 409 with the fresh session. Already-completed session returns 200 with the existing order and `completedElsewhere: true`. Supertest test firing two completes concurrently with different keys, asserting exactly one order. Explain in a comment why both layers are needed.
+
+**Result:**
+- `apps/server/src/checkout-service.ts`: `complete(id, key, version)` now checks, in order:
+  1. 400 if the key or `version` is missing or invalid.
+  2. Replay of the stored key: 200 with the same order (or 202 if still pending).
+  3. Completed under another key: 200 with the existing session plus `completedElsewhere: true`.
+  4. `version` differs from the freshly re-evaluated session: 409 `VERSION_CONFLICT` with the fresh session. No charge.
+  5. Otherwise `PAYMENT_STARTED`, compare-and-set save, charge, outcome.
+  6. If the compare-and-set is lost, re-run steps 2-3 on the latest session (a double click with the same key still gets the winner's result), else 409 `VERSION_CONFLICT`.
+  The comment above `complete()` explains why both layers are needed.
+- `apps/server/src/app.ts`: the key now comes only from the `Idempotency-Key` header; the body `idempotencyKey` field is gone (breaking vs Task 4; no client uses it yet).
+- Tests: new `test/complete.test.ts` (11 tests) and shared `test/helpers.ts`; `sessions.test.ts` updated to the new contract.
+
+**Why both layers (summary of the code comment):** the key means "same request again", for retries and double clicks, and version alone can't serve it because a retry after success carries a stale version. The version means "request made from an out-of-date view", for example two devices with different keys, and the key can't catch it. The explicit version check also isn't enough: two requests can both read version N before either saves, so the store's compare-and-set on `save` is the real guard.
+
+**Test findings:**
+- The HTTP concurrency test (two Supertest requests, different keys, same version) passes and asserts exactly one charge, one `orderId`, one consumed unit, and a loser that got either 409 or `completedElsewhere`. In practice the version check catches the loser first, so it would still pass without the store's compare-and-set. I confirmed this by temporarily disabling the version check in `store.save()` (reverted afterwards).
+- I added a deterministic test that calls `CheckoutService.complete` twice with `Promise.all` and counts failed `save()` calls. It fails when the compare-and-set is disabled and passes with it (exactly one failed save and one charge).
+- The server suite passed on 5 repeated runs.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 28). `pnpm e2e` passed (1).
+
+**Caveats:**
+- There is still no separate order store, so "exactly one order" is asserted via one charge, one `orderId` and one consumed unit.
+- A replay is matched against the session's most recent key only. If a buyer retried with a new key after a failed payment, the earlier failed key is no longer recognized as a replay.
+
+**Next:** Waiting for the next task. Likely candidate: the web UI for starting, resuming and completing a session.
+
+
+## Task 6: Reject different-key attempts during payment
+
+**Asked:** Reject different-key attempts during payment with 409 `PAYMENT_IN_PROGRESS`.
+
+**Result:**
+- `apps/server/src/checkout-service.ts`: `existingOutcome()` now returns 409 `PAYMENT_IN_PROGRESS` (with the current session) when the session is `payment_pending` under a different key. It runs before the version check, so the error is the same whether the caller's version is current or stale. Previously a current version gave `ILLEGAL_TRANSITION` and a stale one gave `VERSION_CONFLICT`.
+- The same-key replay still gets 202, and 200 once the payment settles.
+- A request that loses the compare-and-set race to an in-flight payment now also gets `PAYMENT_IN_PROGRESS` instead of `VERSION_CONFLICT`. I updated the two tests that expected the old code.
+- New test: a different key during a pending payment gets 409 `PAYMENT_IN_PROGRESS` with a current and with a stale version, with no second charge, and the original key still completes after the payment settles.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 29). `pnpm e2e` passed (1).
+
+**Next:** Waiting for the next task.
+
+
+## Task 7: Same-key replay after a failed payment returns the original failure
+
+**Asked:** Same-key replay after a failed payment returns the original failure.
+
+**Result:**
+- `apps/server/src/checkout-service.ts`: `existingOutcome()` is now async. For a `payment_failed` session whose stored key matches the request, it looks up the recorded outcome and returns the same 402 `PAYMENT_FAILED` (original reason, current session). This runs before the version check, so a stale version doesn't matter. The session is not changed and nothing is charged. Before, a replay with a current version re-ran `PAYMENT_STARTED` and bumped the version twice, and a replay with a stale version got `VERSION_CONFLICT`.
+- A new key is still a new attempt.
+- New test: after a failure, replaying the same key with a stale and with a current version returns a body equal to the original 402, with no new charge and no version change, even after the provider is switched to succeed. A new key then succeeds with a second charge.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 30). `pnpm e2e` passed (1).
+
+**Caveat:** replay matching still uses only the session's latest key, so after a retry with a new key the earlier failed key is no longer recognized.
+
+**Next:** Waiting for the next task.
+
+
+## Task 8: Pass the idempotency key to `PaymentService.charge` for provider-level dedupe
+
+**Asked:** Pass idempotency key to `PaymentService.charge` for provider-level dedupe.
+
+**Finding:** `charge()` already received the key, but it was the client's raw key. Client keys are only unique per session, so two sessions sending the same key (for example `pay-1`) shared one provider-level key. The provider treated the second session's charge as a replay of the first. I reproduced this: the second session got a completed order and an order id but was never charged.
+
+**Result:**
+- `apps/server/src/services/payment.ts`: new `providerKey(sessionId, clientKey)` (`"<sessionId>:<clientKey>"`), and `ChargeRequest.idempotencyKey` is documented as the provider-level dedupe key.
+- `apps/server/src/checkout-service.ts`: the key sent to `charge()` and the keys used for `lookup()` (failed-payment replay and pending-payment settlement) are all built with `providerKey`. The session still stores and compares the client's raw key, so the API is unchanged.
+- Tests: two sessions reusing a client key are each charged once with distinct provider keys and distinct orders (this test failed before the fix); a retry of the same request sends the same provider key. Existing tests that read or settle provider keys now use `providerKey()`.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 32). `pnpm e2e` passed (1).
+
+**Next:** Waiting for the next task.

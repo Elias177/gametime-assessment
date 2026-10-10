@@ -1,33 +1,6 @@
-import { createAdaptorServer } from '@hono/node-server';
-import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { createApp } from '../src/app';
-import { ManualClock } from '../src/clock';
-import { createInMemoryDeps } from '../src/deps';
-import type { InMemoryDepsOptions } from '../src/deps';
-
-const LISTING = 'listing-1';
-const TTL_MS = 10 * 60 * 1000;
-const MINUTE = 60 * 1000;
-
-function setup(options: InMemoryDepsOptions = {}) {
-  const clock = new ManualClock();
-  const deps = createInMemoryDeps({
-    clock,
-    stock: { [LISTING]: 1 },
-    prices: { [LISTING]: 10000 },
-    holdTtlMs: TTL_MS,
-    ...options,
-  });
-  const api = request(createAdaptorServer({ fetch: createApp(deps).fetch }));
-
-  const createSession = async () => {
-    const res = await api.post('/api/sessions').send({ listingId: LISTING });
-    expect(res.status).toBe(201);
-    return res.body as { id: string; version: number };
-  };
-  return { clock, deps, api, createSession };
-}
+import { providerKey } from '../src/services/payment';
+import { LISTING, MINUTE, TTL_MS, complete, setup } from './helpers';
 
 describe('happy path', () => {
   it('creates a session with a hold, resumes it unchanged, and completes it', async () => {
@@ -51,26 +24,16 @@ describe('happy path', () => {
     expect(resumed.status).toBe(200);
     expect(resumed.body).toMatchObject({ status: 'active', version: 1, changes: [] });
 
-    const done = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'pay-1' });
+    const done = await complete(api, id, 'pay-1', 1);
     expect(done.status).toBe(200);
     expect(done.body).toMatchObject({ status: 'completed', idempotencyKey: 'pay-1' });
     expect(done.body.orderId).toEqual(expect.any(String));
-    expect(deps.payment.charges).toEqual([{ sessionId: id, amount: 10000, idempotencyKey: 'pay-1' }]);
+    expect(deps.payment.charges).toEqual([
+      { sessionId: id, amount: 10000, idempotencyKey: providerKey(id, 'pay-1') },
+    ]);
 
     const after = await api.get(`/api/sessions/${id}`);
     expect(after.body).toMatchObject({ status: 'completed', orderId: done.body.orderId });
-  });
-
-  it('replaying complete with the same idempotency key does not charge twice', async () => {
-    const { api, deps, createSession } = setup();
-    const { id } = await createSession();
-
-    const first = await api.post(`/api/sessions/${id}/complete`).set('Idempotency-Key', 'k').send({});
-    const second = await api.post(`/api/sessions/${id}/complete`).set('Idempotency-Key', 'k').send({});
-
-    expect(second.status).toBe(200);
-    expect(second.body.orderId).toBe(first.body.orderId);
-    expect(deps.payment.charges).toHaveLength(1);
   });
 });
 
@@ -84,9 +47,9 @@ describe('expiry on resume', () => {
     expect(resumed.status).toBe(200);
     expect(resumed.body).toMatchObject({ status: 'expired', version: 2 });
 
-    const complete = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k' });
-    expect(complete.status).toBe(409);
-    expect(complete.body).toMatchObject({
+    const attempt = await complete(api, id, 'k', 2);
+    expect(attempt.status).toBe(409);
+    expect(attempt.body).toMatchObject({
       error: { code: 'ILLEGAL_TRANSITION' },
       session: { status: 'expired' },
     });
@@ -126,7 +89,7 @@ describe('price change on resume', () => {
     expect(again.body.changes).toHaveLength(1);
     expect(again.body.version).toBe(2);
 
-    const early = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k' });
+    const early = await complete(api, id, 'k', 2);
     expect(early.status).toBe(409);
     expect(deps.payment.charges).toHaveLength(0);
 
@@ -134,7 +97,7 @@ describe('price change on resume', () => {
     expect(ack.status).toBe(200);
     expect(ack.body).toMatchObject({ status: 'active', priceSnapshot: 12500, currentPrice: 12500, version: 3 });
 
-    const done = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k' });
+    const done = await complete(api, id, 'k', 3);
     expect(done.status).toBe(200);
     expect(deps.payment.charges[0]).toMatchObject({ amount: 12500 });
   });
@@ -205,8 +168,8 @@ describe('sold out', () => {
     expect(resumed.status).toBe(200);
     expect(resumed.body).toMatchObject({ status: 'unavailable', version: 2 });
 
-    const complete = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k' });
-    expect(complete.status).toBe(409);
+    const attempt = await complete(api, id, 'k', 2);
+    expect(attempt.status).toBe(409);
     expect(deps.payment.charges).toHaveLength(0);
   });
 });
@@ -216,7 +179,7 @@ describe('payment outcomes', () => {
     const { api, deps, createSession } = setup({ paymentBehavior: 'fail' });
     const { id } = await createSession();
 
-    const failed = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k1' });
+    const failed = await complete(api, id, 'k1', 1);
     expect(failed.status).toBe(402);
     expect(failed.body).toMatchObject({
       error: { code: 'PAYMENT_FAILED', message: 'card_declined' },
@@ -224,7 +187,7 @@ describe('payment outcomes', () => {
     });
 
     deps.payment.setBehavior('succeed');
-    const retry = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k2' });
+    const retry = await complete(api, id, 'k2', failed.body.session.version);
     expect(retry.status).toBe(200);
     expect(retry.body.status).toBe('completed');
   });
@@ -232,11 +195,11 @@ describe('payment outcomes', () => {
   it('re-prices a failed session on retry instead of charging a stale price', async () => {
     const { api, deps, createSession } = setup({ paymentBehavior: 'fail' });
     const { id } = await createSession();
-    await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k1' });
+    const failed = await complete(api, id, 'k1', 1);
 
     deps.payment.setBehavior('succeed');
     deps.pricing.setPrice(LISTING, 11000);
-    const retry = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k2' });
+    const retry = await complete(api, id, 'k2', failed.body.session.version);
 
     expect(retry.status).toBe(409);
     expect(retry.body.session).toMatchObject({ status: 'price_changed', currentPrice: 11000 });
@@ -247,13 +210,13 @@ describe('payment outcomes', () => {
     const { api, deps, createSession } = setup({ paymentBehavior: 'pending' });
     const { id } = await createSession();
 
-    const pending = await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k' });
+    const pending = await complete(api, id, 'k', 1);
     expect(pending.status).toBe(202);
     expect(pending.body.status).toBe('payment_pending');
 
     expect((await api.get(`/api/sessions/${id}`)).body.status).toBe('payment_pending');
 
-    deps.payment.settle('k', { status: 'succeeded' });
+    deps.payment.settle(providerKey(id, 'k'), { status: 'succeeded' });
     const settled = await api.get(`/api/sessions/${id}`);
     expect(settled.body).toMatchObject({ status: 'completed' });
     expect(settled.body.orderId).toEqual(expect.any(String));
@@ -262,7 +225,7 @@ describe('payment outcomes', () => {
   it('does not let a lapsed hold expire a session while payment is in flight', async () => {
     const { api, clock, createSession } = setup({ paymentBehavior: 'pending' });
     const { id } = await createSession();
-    await api.post(`/api/sessions/${id}/complete`).send({ idempotencyKey: 'k' });
+    await complete(api, id, 'k', 1);
 
     clock.advance(TTL_MS * 2);
     expect((await api.get(`/api/sessions/${id}`)).body.status).toBe('payment_pending');
@@ -274,7 +237,7 @@ describe('request validation', () => {
     const { api } = setup();
 
     expect((await api.get('/api/sessions/nope')).status).toBe(404);
-    expect((await api.post('/api/sessions/nope/complete').send({ idempotencyKey: 'k' })).status).toBe(404);
+    expect((await complete(api, 'nope', 'k', 1)).status).toBe(404);
     expect((await api.post('/api/sessions').send({ listingId: 'ghost' })).status).toBe(404);
   });
 
@@ -284,7 +247,6 @@ describe('request validation', () => {
 
     expect((await api.post('/api/sessions').send({})).status).toBe(400);
     expect((await api.post('/api/sessions').set('Content-Type', 'application/json').send('{oops')).status).toBe(400);
-    expect((await api.post(`/api/sessions/${id}/complete`).send({})).status).toBe(400);
     expect((await api.post(`/api/sessions/${id}/acknowledge`).send({})).status).toBe(400);
   });
 });

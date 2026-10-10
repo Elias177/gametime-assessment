@@ -2,7 +2,19 @@ export interface ChargeRequest {
   sessionId: string;
   /** Integer cents. */
   amount: number;
+  /**
+   * Provider-level dedupe key: the provider must treat a repeated key as the same charge and
+   * return the original outcome instead of charging again. Build it with `providerKey`.
+   */
   idempotencyKey: string;
+}
+
+/**
+ * Key sent to the provider for one payment attempt. Client keys are only unique per session
+ * (two sessions may both send "pay-1"), so the session id is part of what the provider dedupes on.
+ */
+export function providerKey(sessionId: string, clientKey: string): string {
+  return `${sessionId}:${clientKey}`;
 }
 
 export type PaymentOutcome =

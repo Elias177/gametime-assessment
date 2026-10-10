@@ -36,8 +36,7 @@ export function createApp(deps: AppDeps = createInMemoryDeps()) {
 
   app.post('/api/sessions/:id/complete', async (c) => {
     const body = await readJson(c.req.raw);
-    const key = c.req.header('Idempotency-Key') ?? body.idempotencyKey;
-    return respond(c, await checkout.complete(c.req.param('id'), key));
+    return respond(c, await checkout.complete(c.req.param('id'), c.req.header('Idempotency-Key'), body.version));
   });
 
   return app;
