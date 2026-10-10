@@ -225,3 +225,62 @@ Log of what was asked and the results, one entry per task.
 **Caveat:** a payment that stays `pending` forever now holds the unit forever. There is no timeout on pending payments yet.
 
 **Next:** Waiting for the next task.
+
+
+## Task 10: Change notification, SSE, listing catalog, and the `useCheckoutSession` hook
+
+**Asked:** Server-side change notification and SSE; a small listing catalog with `GET /api/listings/:id`; a web hook that loads, subscribes to SSE, refetches on focus, polls if SSE fails, and keeps one idempotency key per payment attempt. Tests for store emission, scheduler plus SSE, and key rotation.
+
+**Result, server** (`apps/server/src`):
+- `store.ts`: `SessionStore.subscribe(id, fn)` returns an unsubscribe. The in-memory store emits a copy of the session after every successful `create` and `save` (a lost compare-and-set emits nothing). A throwing listener can't fail the write.
+- `checkout-service.ts`: public `refreshById(id)`; an `onCreated` hook.
+- `scheduler.ts`: `ExpiryScheduler` calls `refreshById` at each session's `holdExpiresAt`. It re-arms on every store change, does not schedule while `payment_pending` (the hold is pinned; settlement re-arms), re-arms itself if a timer fires early, and unsubscribes and cancels once the session is finished.
+- `timers.ts`: `Timers` interface plus `SystemTimers`. `ManualClock` now implements `Timers`, so `clock.advance()` fires due timers in tests.
+- `app.ts`: `GET /api/sessions/:id/events` uses `streamSSE`: the re-evaluated session first, then every change as `event: session` (id = version, older versions skipped), a heartbeat comment every `heartbeatMs` (default 15s), and cleanup on disconnect. The stream closes once the session is finished. Unknown session gives 404.
+- `GET /api/listings/:id`; `services/listings.ts` (`ListingCatalog`). `demo-listing` is seeded in `index.ts` (The Midnight Orchestra, Harbor Hall, Orchestra Left, row F, seats 12 and 13). `Listing` and `isTerminalStatus` live in `packages/shared`.
+
+**Result, web** (`apps/web/src`):
+- `api.ts`: typed fetch wrappers that resolve with the HTTP outcome and reject only on network failure.
+- `useCheckoutSession(id)` returns `{session, listing, loading, error, connection, acknowledge, complete}`. It does the first fetch, then subscribes to SSE, falls back to polling (`pollMs`, default 5s) if the stream fails, refetches on window focus, ignores sessions older than the one shown, and stops streaming once the session is finished.
+- Idempotency key: one per payment attempt, kept across network errors, 409s (including `PAYMENT_IN_PROGRESS`) and 202s. A 409 only updates the version (always taken from the freshest session). A new key is made only after a 402 `PAYMENT_FAILED`.
+- New devDeps: `jsdom`, `@testing-library/react`, `@testing-library/dom`.
+
+**Tests added:** server 16 (`realtime.test.ts`): store emission (create, save, lost CAS, unsubscribe, throwing listener); the scheduler expiring a session with no request, cancelling when finished, and re-arming after a pending payment fails; SSE initial state and headers, a streamed change, scheduler-driven expiry arriving at a subscriber, heartbeat, disconnect cleanup, final-state-then-close, 404; listings 200 and 404. Web 12 (`useCheckoutSession.test.tsx`): loading, SSE updates and stale-update rejection, polling fallback, focus refetch, 404, five key-reuse cases, key rotation after 402 (twice), acknowledge. Mutation checks: with the scheduler's `onCreated` hook disabled, 3 scheduler/SSE tests fail; with the 402 key reset removed, 2 hook tests fail.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 56, web 12). `pnpm e2e` passed (1). Manual check: with `pnpm dev` running, `curl -N localhost:5173/api/sessions/<id>/events` received the initial event through the Vite proxy, and `/api/listings/demo-listing` returned the seeded listing.
+
+**Known gaps:**
+- Only the hold lapsing is time-driven. A price change or lost inventory still shows up only when something calls `refresh()` (a GET, an action, a focus refetch, polling). An open SSE stream does not trigger a refresh by itself.
+- The scheduler and subscriptions are in-process, so they don't span multiple server instances.
+- The web app has no UI using the hook yet.
+
+**Next:** Waiting for the next task.
+
+
+## Task 11: Desktop checkout pane
+
+**Asked:** Two hook changes (`paidHere`; clear an action error when a newer session version arrives), then the desktop checkout pane in `apps/web` (listing summary, price, hold countdown, Pay button, per-state UI, connection indicator, "Start checkout" entry screen, "Continue on phone" link with copy button), and a smoke e2e that starts checkout and sees the pane.
+
+**Hook changes** (`apps/web/src/useCheckoutSession.ts`):
+- `paidHere` is true only when the session is `completed` and its stored `idempotencyKey` equals this client's own attempt key. A session completed under another key (a `completedElsewhere` response, an SSE event, or a refetch) gives false. The key is kept in memory, so after a page reload a past payment from this device is reported as another device.
+- A strictly newer version clears the shown error. The same or an older version does not. Because an action's own failure applies the session first and sets the error after, a fresh 409 or 402 keeps its message.
+- Fix found while checking in a real browser: the server closes the SSE stream after a final status, and the hook was treating that close as a failure and switching the indicator to "polling". It no longer does for finished sessions.
+
+**UI** (`apps/web/src`): `CheckoutView.tsx` (presentational), `CheckoutPane.tsx` (hook wiring, "Start again"), `StartScreen.tsx`, `App.tsx` (tiny router: `/` entry, `/checkout/:id` pane, `/resume/:id` renders the same pane for now), `navigate.ts`, `format.ts`, `useCountdown.ts` (display only), `styles.css`.
+- Summary: event, venue, date, section/row/seats. Price: `priceSnapshot`, and old price struck through with `currentPrice` while `price_changed`. Hold countdown shown while `active`, `price_changed` and `payment_failed` (hidden while a payment is pending, since the hold is pinned).
+- States: `active` (Pay enabled); `price_changed` (banner with old and new price, "Accept new price", Pay disabled); `payment_pending` (spinner, Pay locked; a `PAYMENT_IN_PROGRESS` reply reads "A payment is already in progress on another device"); `payment_failed` (reason, "Try again"); `expired` ("Your hold ran out", "Start again" creates a new session for the same listing); `unavailable` (dead end, "Find other tickets"); `completed` (order confirmation with order id, or "Completed on another device").
+- Connection indicator: live / polling / connecting. "Continue on phone" reveals a `/resume/:sessionId` link with a Copy button.
+- Added an optional `timeZone` to `Listing` (seeded as `America/Los_Angeles`) so the event date shows in the venue's time rather than the viewer's. Without it, the browser showed 10:30 PM for a 7:30 PM event.
+
+**Tests:** hook, 10 new (`paidHere` for own key, `completedElsewhere`, SSE, refetch, re-delivery; error clearing on newer version, kept on same or older, cleared by a refetch; stream close after a final status). View, 15 (`CheckoutView.test.tsx`), one per state plus the error wording, busy state, connection label and phone link. e2e, 3 (`e2e/health.spec.ts`): start checkout and see the pane with price, countdown, enabled Pay and a "live" indicator; the resume link opens the same checkout; `/api/health` through the proxy.
+- Real-browser check (scratch Playwright script, screenshots read): desktop pays, the confirmation shows, and a second browser on the resume link receives "Completed on another device" over SSE.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 56, web 39). `pnpm e2e` passed (3).
+
+**Known gaps / notes:**
+- `/resume/:id` currently renders the same pane; a phone-specific layout is not built.
+- Not exercised in a browser: the price-changed, payment-failed, expired and unavailable states (covered by the view tests only), since the demo server has no way to trigger them.
+- Each "Start checkout" holds one of the 5 demo units for 10 minutes, so repeated manual runs will hit sold out until holds lapse or the server restarts.
+- The countdown uses the client clock, so a skewed device clock shows a wrong time (display only).
+
+**Next:** Waiting for the next task.

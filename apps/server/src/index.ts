@@ -9,6 +9,18 @@ const port = Number(process.env.PORT ?? 3001);
 const deps = createInMemoryDeps({
   stock: { 'demo-listing': 5 },
   prices: { 'demo-listing': 10000 },
+  listings: [
+    {
+      id: 'demo-listing',
+      eventName: 'The Midnight Orchestra',
+      venue: 'Harbor Hall, San Francisco',
+      date: '2030-06-14T19:30:00-07:00',
+      timeZone: 'America/Los_Angeles',
+      section: 'Orchestra Left',
+      row: 'F',
+      seats: ['12', '13'],
+    },
+  ],
   paymentBehavior: (process.env.PAYMENT_BEHAVIOR as PaymentBehavior | undefined) ?? 'succeed',
 });
 

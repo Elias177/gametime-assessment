@@ -10,6 +10,13 @@ export const SESSION_STATUSES = [
 
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
+/** Statuses that can never change again. */
+export const TERMINAL_STATUSES: readonly SessionStatus[] = ['completed', 'expired', 'unavailable'];
+
+export function isTerminalStatus(status: SessionStatus): boolean {
+  return TERMINAL_STATUSES.includes(status);
+}
+
 /** One entry in the price audit trail. Prices are integer cents. */
 export interface PriceChange {
   from: number;

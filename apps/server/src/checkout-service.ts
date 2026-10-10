@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { transition } from '@checkout/shared';
+import { isTerminalStatus, transition } from '@checkout/shared';
 import type { CheckoutSession, SessionEvent, TransitionError } from '@checkout/shared';
 import type { AppDeps } from './deps';
 import { providerKey } from './services/payment';
@@ -21,11 +21,12 @@ const transitionFailure = (error: TransitionError, session: CheckoutSession): Ap
 const conflict = (session: CheckoutSession): ApiResult =>
   apiError(409, 'VERSION_CONFLICT', 'session changed; re-read it and retry', session);
 
-const TERMINAL = new Set<CheckoutSession['status']>(['completed', 'expired', 'unavailable']);
-
 /** Orchestrates the stubbed services around the pure state machine. All time comes from `deps.clock`. */
 export class CheckoutService {
-  constructor(private readonly deps: AppDeps) {}
+  constructor(
+    private readonly deps: AppDeps,
+    private readonly hooks: { onCreated?: (session: CheckoutSession) => void } = {},
+  ) {}
 
   create(listingId: unknown): ApiResult {
     if (typeof listingId !== 'string' || listingId === '') {
@@ -53,7 +54,14 @@ export class CheckoutService {
       changes: [],
     };
     this.deps.store.create(session);
+    this.hooks.onCreated?.(session);
     return { status: 201, body: session };
+  }
+
+  /** Re-evaluate a session and persist any change (which notifies store subscribers). */
+  async refreshById(id: string): Promise<CheckoutSession | undefined> {
+    const stored = this.deps.store.get(id);
+    return stored && this.refresh(stored);
   }
 
   /** Resume: re-evaluates expiry, inventory and price before answering. */
@@ -170,7 +178,7 @@ export class CheckoutService {
 
   /** Feed the machine every external fact that may have changed since the session was last touched. */
   private async refresh(session: CheckoutSession): Promise<CheckoutSession> {
-    if (TERMINAL.has(session.status)) return session;
+    if (isTerminalStatus(session.status)) return session;
 
     const { clock, inventory, pricing, payment } = this.deps;
     const now = clock.now();
