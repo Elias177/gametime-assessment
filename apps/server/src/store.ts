@@ -16,6 +16,8 @@ export interface SessionStore {
    * (pub/sub, change streams) as long as they keep this contract.
    */
   subscribe(id: string, listener: SessionListener): () => void;
+  /** Every stored session (copies), in creation order. Used by dev tools to find sessions. */
+  list(): CheckoutSession[];
 }
 
 export class InMemorySessionStore implements SessionStore {
@@ -49,6 +51,15 @@ export class InMemorySessionStore implements SessionStore {
       subscribed.delete(listener);
       if (subscribed.size === 0 && this.listeners.get(id) === subscribed) this.listeners.delete(id);
     };
+  }
+
+  list(): CheckoutSession[] {
+    return [...this.sessions.values()].map((session) => structuredClone(session));
+  }
+
+  /** Forget every session (dev reset). Subscriptions stay, so a stream can still see a recreated id. */
+  clear(): void {
+    this.sessions.clear();
   }
 
   /** Open subscriptions for a session; lets tests check that disconnects clean up. */

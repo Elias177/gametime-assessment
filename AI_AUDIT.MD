@@ -315,3 +315,41 @@ Log of what was asked and the results, one entry per task.
 - Phone-frame size is fixed (390x780); the frame scrolls its own content.
 
 **Next:** Waiting for the next task.
+
+
+## Task 13: Dev-only controls (chaos panel)
+
+**Asked:** Dev-only controls behind `DEV_TOOLS=1` (set in the root dev script and the Playwright webServer command, never on by default, dev routes never mounted without it). Server: `OffsetClock`, `SessionStore.list()` plus a helper that refreshes live sessions, and a `/api/dev` router (expire, price, sell-out, payment-behavior, settle, reset, status) with Supertest coverage including SSE and "404 when off". Web: a collapsible Chaos panel under the split demo (not `/resume`), shown only when the server reports dev tools; view tests; e2e for the recovery states that Task 11/12 flagged as unit-tested only; `/api/dev/reset` at the start of every e2e test.
+
+**Server:**
+- `OffsetClock` (`clock.ts`): wraps a clock (system by default), adds `advance(ms)`, `reset()`, `offsetMs`. `index.ts` uses it as the clock for every service only when `DEV_TOOLS === '1'`.
+- `SessionStore.list()` (copies) and `InMemorySessionStore.clear()`. `CheckoutService.refreshLive(listingId?)` refreshes every non-terminal session (optionally one listing) through `refreshById`, so changes are saved and pushed to SSE. The scheduler's real timers are never relied on after a clock jump.
+- `ExpiryScheduler.clear()`; `reset()` on the in-memory inventory, pricing and payment services (each restores the seed it was built with; payment also clears outcomes, recorded charges and restores the initial behavior); `InMemoryPaymentService.getBehavior()`.
+- `dev.ts`, mounted by `createApp(deps, {devTools: {deps, clock}})` only when that option is passed, so without it `/api/dev/*` is a plain 404. No client headers needed. Endpoints:
+  - `GET /status` -> `{enabled, paymentBehavior, clockOffsetMs}`.
+  - `POST /expire/:sessionId`: advance the clock to 1ms past that session's `holdExpiresAt` (no advance if already past), then refresh all live sessions. Note this is global: it also lapses any other hold that ends sooner.
+  - `POST /price {listingId, deltaCents}`: integer delta, price floored at 0, then refresh live sessions on that listing.
+  - `POST /sell-out {listingId}`: `revokeStock`, then refresh live sessions on that listing.
+  - `POST /payment-behavior {behavior}`; `POST /settle/:sessionId {outcome}` (`payment.settle` on `providerKey(id, idempotencyKey)`, then `refreshById`; 409 `NOT_PAYMENT_PENDING` otherwise, with the session attached).
+  - `POST /reset` -> 204: scheduler cleared first, then store, inventory, pricing, payment and the clock offset.
+  - Errors use the normal shape: 400 `INVALID_REQUEST`, 404 `SESSION_NOT_FOUND` / `LISTING_NOT_FOUND`. Body is validated before the session is looked up.
+
+**Web:**
+- `ChaosPanel.tsx`: `ChaosPanelView` (presentational) and `ChaosPanel` (container). Buttons: Expire hold, Price +$12, Price -$5, Sell out, Next payment succeed/fail/pending (active one marked with `aria-pressed` and shown as "Next payment: X"), Settle pending succeed/fail, Reset demo. The result or error of each action shows for 4s. The panel collapses (the active behavior and the result stay visible). Reset navigates to `/`.
+- The container asks `GET /api/dev/status` and renders nothing unless it answers with `enabled`; only then does it fetch the session (to learn its listing for price and sell-out), so a normal server sees one 404 and nothing else. Mounted under the split demo only, aimed at the current session. It changes the server and does nothing else to the panes: both update through their own SSE streams, with no reload.
+- `api.ts`: `getDevStatus`, `devAction`; client headers are now optional.
+
+**Tests added:** server 29 (`dev.test.ts`): `OffsetClock`, `store.list()`; every `/api/dev` route 404s when off while `/api/health` still works; each endpoint's happy path, validation (400), unknown id (404) and 409; expire refreshes other live sessions and does not move the clock if already lapsed; price clamp at 0 and other listings untouched; sell-out blocks new checkouts; behavior steers `/complete`; reset restores sessions, stock, price, behavior, clock, recorded charges and scheduler timers; an open SSE stream receives the change for expire, price, sell-out and settle. Web 28: `ChaosPanel.test.tsx` (view: every button's action, labels, active behavior, result/alert, busy disables via the fieldset, collapse; container: hidden when off, no extra requests when off, endpoints and bodies, error and offline results, result clears after 4s, reset navigates, failed reset does not) and 3 in `App.test.tsx` (panel under the split demo when on, absent when off, absent and never requested on `/resume`). e2e now 11: price_changed on both panes then accept and pay, a price drop applied silently, expired, unavailable, a pending payment settled as failed (all on desktop and the phone sheet), Reset demo returns to the start screen, no chaos panel on `/resume`, plus the earlier ones. `/api/dev/reset` runs before each e2e test and fails loudly if it is not a 204.
+- Mutation check: with `refreshLive` doing nothing, 8 server tests fail (including the 4 SSE ones). The first version passed most of them because they read through `GET`, which re-evaluates on its own; the helper now reads the store directly.
+- Real check: started `src/index.ts` without `DEV_TOOLS`: `/api/dev/status` and `/api/dev/reset` returned 404, `/api/health` 200.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 92, web 90). `pnpm e2e` passed (11), both reusing a running server and cold with Playwright starting it.
+
+**Notes / known gaps:**
+- New dev dependency `cross-env` (root): `DEV_TOOLS=1 cmd` does not work in Windows shells. Root `dev` is now `cross-env DEV_TOOLS=1 concurrently ...`, so **`pnpm dev` always has dev tools on**; the server itself still defaults to off (`node`/`tsx src/index.ts` alone). Playwright runs `pnpm exec cross-env DEV_TOOLS=1 pnpm dev`, and `workers: 1` was added because every test resets the one shared server.
+- `reuseExistingServer` is still true. A server left running without `DEV_TOOLS` makes every e2e test fail at the reset check. I hit this once from an orphaned server left on port 3001 (killed it; a cold run then passed and left nothing running).
+- Dev tools have no auth: they exist only with `DEV_TOOLS=1` and must not be set in a real deployment.
+- Reset removes sessions without telling open streams or other tabs; a stale tab gets a 404 on its next fetch. The panel's tab goes to the start screen.
+- Open sessions in a pending payment ignore Expire hold (the hold is pinned), by design.
+
+**Next:** Waiting for the next task.

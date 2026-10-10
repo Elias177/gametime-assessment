@@ -387,3 +387,52 @@ code {
   border: 0;
   border-radius: 0;
 }
+
+/* Chaos panel (dev tools, demo only). */
+.chaos {
+  max-width: 960px;
+  margin: 0 auto 32px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  background: var(--card);
+  border: 1px dashed var(--warn-line);
+  border-radius: 12px;
+}
+
+.chaos-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chaos-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.chaos fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.chaos legend {
+  padding: 0 4px;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.chaos button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

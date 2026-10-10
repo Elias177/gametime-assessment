@@ -34,6 +34,11 @@ export class ExpiryScheduler {
     this.arm(session);
   }
 
+  /** Stop watching everything and cancel every timer (dev reset). */
+  clear(): void {
+    for (const id of [...this.tracked.keys()]) this.untrack(id);
+  }
+
   private onChange(session: CheckoutSession): void {
     if (isTerminalStatus(session.status)) this.untrack(session.id);
     else this.arm(session);

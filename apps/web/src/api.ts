@@ -34,8 +34,11 @@ export type ApiResult<T> =
   | { ok: false; status: number; body: ApiErrorBody | undefined };
 
 /** Resolves with the HTTP outcome for any response; rejects only on network failure. */
-async function call<T>(path: string, client: ClientInfo, init: RequestInit = {}): Promise<ApiResult<T>> {
-  const res = await fetch(path, { ...init, headers: { ...init.headers as Record<string, string>, ...clientHeaders(client) } });
+async function call<T>(path: string, client: ClientInfo | undefined, init: RequestInit = {}): Promise<ApiResult<T>> {
+  const res = await fetch(path, {
+    ...init,
+    headers: { ...(init.headers as Record<string, string>), ...(client && clientHeaders(client)) },
+  });
   const body: unknown = await res.json().catch(() => undefined);
   return res.ok
     ? { ok: true, status: res.status, body: body as T }
@@ -64,3 +67,18 @@ export const completeSession = (id: string, idempotencyKey: string, version: num
 
 export const createSession = (listingId: string, client: ClientInfo) =>
   call<CheckoutSession>('/api/sessions', client, post({ listingId }));
+
+export type PaymentBehavior = 'succeed' | 'fail' | 'pending';
+
+export interface DevStatus {
+  enabled: true;
+  paymentBehavior: PaymentBehavior;
+  clockOffsetMs: number;
+}
+
+/** Dev tools (`/api/dev`) exist only when the server runs with DEV_TOOLS=1; otherwise this is a 404. */
+export const getDevStatus = () => call<DevStatus>('/api/dev/status', undefined);
+
+/** POST to a dev action, e.g. `devAction('price', {listingId, deltaCents})`. No client headers needed. */
+export const devAction = (action: string, body: object = {}) =>
+  call<unknown>(`/api/dev/${action}`, undefined, post(body));

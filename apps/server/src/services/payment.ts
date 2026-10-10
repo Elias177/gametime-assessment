@@ -36,10 +36,24 @@ export class InMemoryPaymentService implements PaymentService {
   /** Every distinct charge that reached the provider, for assertions in tests. */
   readonly charges: ChargeRequest[] = [];
 
-  constructor(private behavior: PaymentBehavior = 'succeed') {}
+  constructor(
+    private behavior: PaymentBehavior = 'succeed',
+    private readonly initialBehavior: PaymentBehavior = behavior,
+  ) {}
 
   setBehavior(behavior: PaymentBehavior): void {
     this.behavior = behavior;
+  }
+
+  getBehavior(): PaymentBehavior {
+    return this.behavior;
+  }
+
+  /** Forget every recorded outcome and charge and restore the initial behavior (dev reset). */
+  reset(): void {
+    this.outcomes.clear();
+    this.charges.length = 0;
+    this.behavior = this.initialBehavior;
   }
 
   /** Resolve a pending charge, as a provider webhook or poll would. */

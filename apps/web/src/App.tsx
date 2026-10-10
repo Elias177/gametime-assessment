@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { newClientId, tabClient } from './clientId';
+import { ChaosPanel } from './ChaosPanel';
 import { CheckoutPane } from './CheckoutPane';
 import { usePath } from './navigate';
 import { StartScreen } from './StartScreen';
@@ -38,14 +39,18 @@ function SplitDemo({ sessionId }: { sessionId: string }) {
   const [phone] = useState(() => ({ clientId: newClientId(), surface: 'mobile' as const }));
 
   return (
-    <div className="demo">
-      <div className="demo-desktop" data-testid="desktop-pane">
-        <CheckoutPane sessionId={sessionId} client={desktop} />
+    <>
+      <div className="demo">
+        <div className="demo-desktop" data-testid="desktop-pane">
+          <CheckoutPane sessionId={sessionId} client={desktop} />
+        </div>
+        <div className="phone-frame" data-testid="phone-pane" aria-label="Phone preview">
+          <CheckoutPane sessionId={sessionId} client={phone} />
+        </div>
       </div>
-      <div className="phone-frame" data-testid="phone-pane" aria-label="Phone preview">
-        <CheckoutPane sessionId={sessionId} client={phone} />
-      </div>
-    </div>
+      {/* Only the demo has it (not /resume), and it renders nothing unless the server has dev tools on. */}
+      <ChaosPanel sessionId={sessionId} client={desktop} />
+    </>
   );
 }
 

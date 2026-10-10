@@ -43,13 +43,18 @@ let requests: Array<{ path: string; clientId?: string; surface?: string }> = [];
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
-function open(path: string, originClientId = session.originClientId) {
+function open(path: string, originClientId = session.originClientId, devTools = false) {
   window.history.pushState({}, '', path);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       requests.push({ path: url, clientId: headers['X-Client-Id'], surface: headers['X-Surface'] });
+      if (url === '/api/dev/status') {
+        return devTools
+          ? json({ enabled: true, paymentBehavior: 'succeed', clockOffsetMs: 0 })
+          : new Response('{}', { status: 404 });
+      }
       return url.startsWith('/api/listings/') ? json(listing) : json({ ...session, originClientId });
     }),
   );
@@ -94,7 +99,7 @@ describe('/checkout/:id split-screen demo', () => {
     expect(web.clientId).not.toBe(mobile.clientId);
 
     // Every request from a pane carries that pane's identity, and nothing is anonymous.
-    for (const r of requests) expect([r.path, r.clientId && r.surface]).toEqual([r.path, expect.any(String)]);
+    for (const r of requests.filter((r) => !r.path.startsWith('/api/dev/'))) expect([r.path, r.clientId && r.surface]).toEqual([r.path, expect.any(String)]);
     expect(FakeEventSource.urls.sort()).toEqual(
       [
         `/api/sessions/s1/events?clientId=${web.clientId}&surface=web`,
@@ -110,6 +115,31 @@ describe('/checkout/:id split-screen demo', () => {
 
     const phone = await screen.findByTestId('phone-pane');
     expect((await within(phone).findByTestId('origin-label')).textContent).toBe('Opened from link');
+  });
+});
+
+describe('chaos panel placement', () => {
+  it('shows under the split demo when the server has dev tools on', async () => {
+    open('/checkout/s1', session.originClientId, true);
+
+    expect(await screen.findByTestId('chaos-panel')).toBeTruthy();
+    expect(screen.getByTestId('chaos-behavior').textContent).toBe('Next payment: succeed');
+  });
+
+  it('is absent when the server has dev tools off', async () => {
+    open('/checkout/s1');
+    await screen.findByTestId('phone-pane');
+    await waitFor(() => expect(requests.some((r) => r.path === '/api/dev/status')).toBe(true));
+
+    expect(screen.queryByTestId('chaos-panel')).toBeNull();
+  });
+
+  it('is not on /resume, which does not even ask for it', async () => {
+    open('/resume/s1', session.originClientId, true);
+    await screen.findByTestId('origin-label');
+
+    expect(screen.queryByTestId('chaos-panel')).toBeNull();
+    expect(requests.some((r) => r.path.startsWith('/api/dev/'))).toBe(false);
   });
 });
 

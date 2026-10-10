@@ -6,6 +6,8 @@ import { CheckoutService } from './checkout-service';
 import type { ApiResult, ClientContext, ServiceHooks } from './checkout-service';
 import { createInMemoryDeps } from './deps';
 import type { AppDeps } from './deps';
+import { createDevRouter } from './dev';
+import type { DevToolsOptions } from './dev';
 import { ExpiryScheduler } from './scheduler';
 
 const MAX_CLIENT_ID_LENGTH = 128;
@@ -20,7 +22,10 @@ function clientContext(clientId: string | undefined, surface: string | undefined
 
 export function createApp(
   deps: AppDeps = createInMemoryDeps(),
-  options: Pick<ServiceHooks, 'onRequest'> = {},
+  options: Pick<ServiceHooks, 'onRequest'> & {
+    /** Mounts `/api/dev`. Pass it only when DEV_TOOLS is on; without it the routes do not exist. */
+    devTools?: DevToolsOptions;
+  } = {},
 ) {
   const app = new Hono();
   // The service's onCreated hook needs the scheduler, and the scheduler needs the service.
@@ -30,6 +35,7 @@ export function createApp(
     onRequest: options.onRequest,
   });
   scheduler = new ExpiryScheduler(deps, (id) => checkout.refreshById(id));
+  if (options.devTools) app.route('/api/dev', createDevRouter(options.devTools, checkout, scheduler));
   const clientFromHeaders = (c: { req: { header: (name: string) => string | undefined } }) =>
     clientContext(c.req.header('X-Client-Id'), c.req.header('X-Surface'));
 

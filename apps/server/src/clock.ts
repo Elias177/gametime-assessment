@@ -10,6 +10,33 @@ export class SystemClock implements Clock {
   }
 }
 
+/**
+ * Dev-tools clock: real time plus an offset that `advance` pushes forward and `reset` clears.
+ * It does not move any timers, so after a jump callers must re-evaluate sessions themselves.
+ */
+export class OffsetClock implements Clock {
+  private offset = 0;
+
+  constructor(private readonly base: Clock = new SystemClock()) {}
+
+  now(): Date {
+    return new Date(this.base.now().getTime() + this.offset);
+  }
+
+  /** How far this clock is ahead of the wrapped one. */
+  get offsetMs(): number {
+    return this.offset;
+  }
+
+  advance(ms: number): void {
+    this.offset += ms;
+  }
+
+  reset(): void {
+    this.offset = 0;
+  }
+}
+
 interface PendingTimer {
   at: number;
   fn: () => void;

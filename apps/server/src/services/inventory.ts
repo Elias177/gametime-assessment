@@ -38,12 +38,21 @@ interface StoredHold extends Hold {
 export class InMemoryInventoryService implements InventoryService {
   private readonly stock = new Map<string, number>();
   private readonly holds = new Map<string, StoredHold>();
+  private readonly seed: Record<string, number>;
 
   constructor(
     private readonly clock: Clock,
     initialStock: Record<string, number> = {},
   ) {
-    for (const [listingId, units] of Object.entries(initialStock)) this.stock.set(listingId, units);
+    this.seed = { ...initialStock };
+    this.reset();
+  }
+
+  /** Back to the initial stock with no holds (dev reset). */
+  reset(): void {
+    this.holds.clear();
+    this.stock.clear();
+    for (const [listingId, units] of Object.entries(this.seed)) this.stock.set(listingId, units);
   }
 
   hold(listingId: string, ownerId: string, ttlMs: number): HoldResult {

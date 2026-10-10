@@ -10,7 +10,7 @@ export interface ApiResult {
   body: object;
 }
 
-const apiError = (status: ApiResult['status'], code: string, message: string, session?: CheckoutSession): ApiResult => ({
+export const apiError = (status: ApiResult['status'], code: string, message: string, session?: CheckoutSession): ApiResult => ({
   status,
   body: { error: { code, message }, ...(session && { session }) },
 });
@@ -83,6 +83,18 @@ export class CheckoutService {
   async refreshById(id: string): Promise<CheckoutSession | undefined> {
     const stored = this.deps.store.get(id);
     return stored && this.refresh(stored);
+  }
+
+  /**
+   * Re-evaluate every session that can still change, optionally only those on one listing, and
+   * persist (and so announce) whatever changed. Used after something moved outside the request
+   * path, such as a clock jump, when the scheduler's real timers can't be trusted.
+   */
+  async refreshLive(listingId?: string): Promise<void> {
+    const live = this.deps.store
+      .list()
+      .filter((s) => !isTerminalStatus(s.status) && (listingId === undefined || s.listingId === listingId));
+    await Promise.all(live.map((s) => this.refreshById(s.id)));
   }
 
   /** A client opens the live stream: the current state, re-evaluated. */
