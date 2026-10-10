@@ -1,4 +1,19 @@
-import type { CheckoutSession, Listing } from '@checkout/shared';
+import type { CheckoutSession, Listing, Surface } from '@checkout/shared';
+
+/** Who is calling: one `clientId` per pane/device, sent with every request for analytics later. */
+export interface ClientInfo {
+  clientId: string;
+  surface: Surface;
+}
+
+const clientHeaders = ({ clientId, surface }: ClientInfo): Record<string, string> => ({
+  'X-Client-Id': clientId,
+  'X-Surface': surface,
+});
+
+/** EventSource can't set headers, so the stream identifies its client in the query string. */
+export const eventsUrl = (id: string, { clientId, surface }: ClientInfo) =>
+  `/api/sessions/${id}/events?${new URLSearchParams({ clientId, surface })}`;
 
 export interface ApiError {
   code: string;
@@ -19,8 +34,8 @@ export type ApiResult<T> =
   | { ok: false; status: number; body: ApiErrorBody | undefined };
 
 /** Resolves with the HTTP outcome for any response; rejects only on network failure. */
-async function call<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
-  const res = await fetch(path, init);
+async function call<T>(path: string, client: ClientInfo, init: RequestInit = {}): Promise<ApiResult<T>> {
+  const res = await fetch(path, { ...init, headers: { ...init.headers as Record<string, string>, ...clientHeaders(client) } });
   const body: unknown = await res.json().catch(() => undefined);
   return res.ok
     ? { ok: true, status: res.status, body: body as T }
@@ -33,17 +48,19 @@ const post = (body: unknown, headers: Record<string, string> = {}): RequestInit 
   body: JSON.stringify(body),
 });
 
-export const getSession = (id: string) => call<CheckoutSession>(`/api/sessions/${id}`);
+export const getSession = (id: string, client: ClientInfo) => call<CheckoutSession>(`/api/sessions/${id}`, client);
 
-export const getListing = (id: string) => call<Listing>(`/api/listings/${id}`);
+export const getListing = (id: string, client: ClientInfo) => call<Listing>(`/api/listings/${id}`, client);
 
-export const acknowledgeSession = (id: string, version: number) =>
-  call<CheckoutSession>(`/api/sessions/${id}/acknowledge`, post({ version }));
+export const acknowledgeSession = (id: string, version: number, client: ClientInfo) =>
+  call<CheckoutSession>(`/api/sessions/${id}/acknowledge`, client, post({ version }));
 
-export const completeSession = (id: string, idempotencyKey: string, version: number) =>
+export const completeSession = (id: string, idempotencyKey: string, version: number, client: ClientInfo) =>
   call<SessionResponse>(
     `/api/sessions/${id}/complete`,
+    client,
     post({ version }, { 'Idempotency-Key': idempotencyKey }),
   );
 
-export const createSession = (listingId: string) => call<CheckoutSession>('/api/sessions', post({ listingId }));
+export const createSession = (listingId: string, client: ClientInfo) =>
+  call<CheckoutSession>('/api/sessions', client, post({ listingId }));

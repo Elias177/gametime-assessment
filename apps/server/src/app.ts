@@ -1,19 +1,37 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { isTerminalStatus } from '@checkout/shared';
+import { isSurface, isTerminalStatus } from '@checkout/shared';
 import type { CheckoutSession, HealthResponse } from '@checkout/shared';
 import { CheckoutService } from './checkout-service';
-import type { ApiResult } from './checkout-service';
+import type { ApiResult, ClientContext, ServiceHooks } from './checkout-service';
 import { createInMemoryDeps } from './deps';
 import type { AppDeps } from './deps';
 import { ExpiryScheduler } from './scheduler';
 
-export function createApp(deps: AppDeps = createInMemoryDeps()) {
+const MAX_CLIENT_ID_LENGTH = 128;
+
+/** Who is calling: headers on normal requests, query params for SSE (EventSource can't set headers). */
+function clientContext(clientId: string | undefined, surface: string | undefined): ClientContext {
+  return {
+    ...(clientId && clientId.length <= MAX_CLIENT_ID_LENGTH && { clientId }),
+    ...(isSurface(surface) && { surface }),
+  };
+}
+
+export function createApp(
+  deps: AppDeps = createInMemoryDeps(),
+  options: Pick<ServiceHooks, 'onRequest'> = {},
+) {
   const app = new Hono();
   // The service's onCreated hook needs the scheduler, and the scheduler needs the service.
   let scheduler: ExpiryScheduler;
-  const checkout = new CheckoutService(deps, { onCreated: (session) => scheduler.track(session) });
+  const checkout = new CheckoutService(deps, {
+    onCreated: (session) => scheduler.track(session),
+    onRequest: options.onRequest,
+  });
   scheduler = new ExpiryScheduler(deps, (id) => checkout.refreshById(id));
+  const clientFromHeaders = (c: { req: { header: (name: string) => string | undefined } }) =>
+    clientContext(c.req.header('X-Client-Id'), c.req.header('X-Surface'));
 
   app.get('/api/health', (c) => {
     const body: HealthResponse = { status: 'ok', time: deps.clock.now().toISOString() };
@@ -36,10 +54,10 @@ export function createApp(deps: AppDeps = createInMemoryDeps()) {
 
   app.post('/api/sessions', async (c) => {
     const body = await readJson(c.req.raw);
-    return respond(c, checkout.create(body.listingId));
+    return respond(c, checkout.create(body.listingId, clientFromHeaders(c)));
   });
 
-  app.get('/api/sessions/:id', async (c) => respond(c, await checkout.get(c.req.param('id'))));
+  app.get('/api/sessions/:id', async (c) => respond(c, await checkout.get(c.req.param('id'), clientFromHeaders(c))));
 
   /**
    * Server-sent events: the current (re-evaluated) session first, then every change to it,
@@ -48,7 +66,7 @@ export function createApp(deps: AppDeps = createInMemoryDeps()) {
    */
   app.get('/api/sessions/:id/events', async (c) => {
     const id = c.req.param('id');
-    const initial = await checkout.refreshById(id);
+    const initial = await checkout.open(id, clientContext(c.req.query('clientId'), c.req.query('surface')));
     if (!initial) return c.json({ error: { code: 'SESSION_NOT_FOUND', message: `no session ${id}` } }, 404);
 
     return streamSSE(c, async (stream) => {
@@ -96,12 +114,15 @@ export function createApp(deps: AppDeps = createInMemoryDeps()) {
 
   app.post('/api/sessions/:id/acknowledge', async (c) => {
     const body = await readJson(c.req.raw);
-    return respond(c, await checkout.acknowledge(c.req.param('id'), body.version));
+    return respond(c, await checkout.acknowledge(c.req.param('id'), body.version, clientFromHeaders(c)));
   });
 
   app.post('/api/sessions/:id/complete', async (c) => {
     const body = await readJson(c.req.raw);
-    return respond(c, await checkout.complete(c.req.param('id'), c.req.header('Idempotency-Key'), body.version));
+    return respond(
+      c,
+      await checkout.complete(c.req.param('id'), c.req.header('Idempotency-Key'), body.version, clientFromHeaders(c)),
+    );
   });
 
   return app;

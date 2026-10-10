@@ -224,3 +224,166 @@ code {
   font-size: 0.9em;
   word-break: break-all;
 }
+
+/* Split-screen demo: desktop pane on the left, phone frame on the right. */
+.demo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 32px 16px;
+}
+
+.demo-desktop {
+  flex: 1 1 420px;
+  max-width: 560px;
+  min-width: 0;
+}
+
+.phone-frame {
+  position: relative;
+  flex: 0 0 auto;
+  width: 390px;
+  max-width: 100%;
+  height: 780px;
+  border: 10px solid #1c2330;
+  border-radius: 40px;
+  background: var(--card);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.phone-frame > .mobile,
+.phone-frame > .pane {
+  flex: 1;
+}
+
+/* Mobile layout, in the frame or filling a real phone's screen. */
+.mobile-full {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+}
+
+.mobile-full > .mobile,
+.mobile-full > .pane {
+  flex: 1;
+}
+
+.mobile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--card);
+}
+
+.phone-frame .mobile {
+  overflow-y: auto;
+}
+
+.mobile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.origin {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.mobile-body {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 16px;
+}
+
+.mobile h1 {
+  font-size: 1.25rem;
+}
+
+.pay-bar {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--card);
+  border-top: 1px solid var(--line);
+}
+
+.pay-bar button {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 1.0625rem;
+}
+
+/* Recovery bottom sheet. In the frame it covers the frame; on a real phone, the screen. */
+.sheet-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(28, 35, 48, 0.45);
+  z-index: 10;
+}
+
+.mobile-full .sheet-layer {
+  position: fixed;
+}
+
+.sheet {
+  width: 100%;
+  display: grid;
+  gap: 12px;
+  padding: 12px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  background: var(--card);
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18);
+}
+
+.sheet h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.sheet button {
+  padding: 14px 16px;
+}
+
+.sheet-grip {
+  justify-self: center;
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sheet {
+    animation: sheet-up 0.2s ease-out;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+
+/* The simulated phone's content must not inherit the desktop card chrome. */
+.phone-frame .pane,
+.mobile-full .pane {
+  border: 0;
+  border-radius: 0;
+}

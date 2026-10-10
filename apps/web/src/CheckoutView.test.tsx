@@ -19,6 +19,9 @@ const listing: Listing = {
 const makeSession = (overrides: Partial<CheckoutSession> = {}): CheckoutSession => ({
   id: 's1',
   listingId: 'l1',
+  createdAt: '2030-01-01T00:00:00.000Z',
+  originClientId: 'client-a',
+  originSurface: 'web',
   status: 'active',
   priceSnapshot: 10000,
   currentPrice: 10000,

@@ -27,9 +27,24 @@ export interface PriceChange {
   outcome: 'auto_applied' | 'needs_ack';
 }
 
+export const SURFACES = ['web', 'mobile'] as const;
+
+/** Which kind of client made a request. */
+export type Surface = (typeof SURFACES)[number];
+
+export function isSurface(value: unknown): value is Surface {
+  return SURFACES.includes(value as Surface);
+}
+
 export interface CheckoutSession {
   id: string;
   listingId: string;
+  /** ISO timestamp of when the session was created. */
+  createdAt: string;
+  /** The client (one per pane/device, from `X-Client-Id`) that started this checkout. */
+  originClientId: string;
+  /** The surface (`X-Surface`) that client was on. */
+  originSurface: Surface;
   status: SessionStatus;
   /** Price (integer cents) the buyer has agreed to. */
   priceSnapshot: number;

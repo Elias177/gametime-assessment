@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CheckoutService } from '../src/checkout-service';
 import { providerKey } from '../src/services/payment';
-import { LISTING, complete, setup } from './helpers';
+import { LISTING, complete, setup, startSession } from './helpers';
 
 // See the comment above CheckoutService.complete for why the idempotency key and the
 // session version are both required.
@@ -197,7 +197,7 @@ describe('concurrent completes with different keys', () => {
     expect(final.body).toMatchObject({ status: 'completed', orderId: [...orderIds][0] });
 
     // The single unit was consumed once: nothing left to sell.
-    const another = await api.post('/api/sessions').send({ listingId: LISTING });
+    const another = await startSession(api);
     expect(another.status).toBe(409);
     expect(another.body.error.code).toBe('SOLD_OUT');
   });
@@ -205,7 +205,7 @@ describe('concurrent completes with different keys', () => {
   it('is stopped by the store compare-and-set, not only by the version check', async () => {
     const { deps } = setup();
     const service = new CheckoutService(deps);
-    const created = service.create(LISTING).body as { id: string; version: number };
+    const created = service.create(LISTING, { clientId: 'client-a', surface: 'web' }).body as { id: string; version: number };
 
     let failedSaves = 0;
     const save = deps.store.save.bind(deps.store);
@@ -218,8 +218,8 @@ describe('concurrent completes with different keys', () => {
     // Both calls read version 1 and pass the explicit version check before either saves
     // (they interleave at `await refresh`), so only the compare-and-set can reject the loser.
     const results = await Promise.all([
-      service.complete(created.id, 'phone', created.version),
-      service.complete(created.id, 'laptop', created.version),
+      service.complete(created.id, 'phone', created.version, {}),
+      service.complete(created.id, 'laptop', created.version, {}),
     ]);
 
     expect(failedSaves).toBe(1);

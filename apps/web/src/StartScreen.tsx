@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createSession } from './api';
+import { tabClient } from './clientId';
 import { navigate } from './navigate';
 
 export const DEMO_LISTING_ID = 'demo-listing';
@@ -12,7 +13,7 @@ export function StartScreen() {
     setBusy(true);
     setError(null);
     try {
-      const res = await createSession(DEMO_LISTING_ID);
+      const res = await createSession(DEMO_LISTING_ID, tabClient('web'));
       if (res.ok) navigate(`/checkout/${res.body.id}`);
       else setError(res.body?.error.code === 'SOLD_OUT' ? 'Sorry, these seats are sold out.' : 'Could not start checkout.');
     } catch {

@@ -7,6 +7,9 @@ import { LISTING, TTL_MS, complete, listen, openEvents, setup, waitFor } from '.
 const session = (overrides: Partial<CheckoutSession> = {}): CheckoutSession => ({
   id: 's1',
   listingId: LISTING,
+  createdAt: '2030-01-01T00:00:00.000Z',
+  originClientId: 'client-a',
+  originSurface: 'web',
   status: 'active',
   priceSnapshot: 10000,
   currentPrice: 10000,

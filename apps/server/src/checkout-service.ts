@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isTerminalStatus, transition } from '@checkout/shared';
-import type { CheckoutSession, SessionEvent, TransitionError } from '@checkout/shared';
+import type { CheckoutSession, SessionEvent, Surface, TransitionError } from '@checkout/shared';
 import type { AppDeps } from './deps';
 import { providerKey } from './services/payment';
 import type { PaymentOutcome } from './services/payment';
@@ -21,17 +21,34 @@ const transitionFailure = (error: TransitionError, session: CheckoutSession): Ap
 const conflict = (session: CheckoutSession): ApiResult =>
   apiError(409, 'VERSION_CONFLICT', 'session changed; re-read it and retry', session);
 
+/** Who made a request, from `X-Client-Id` / `X-Surface` (SSE: query params). Absent when the caller sent nothing usable. */
+export interface ClientContext {
+  clientId?: string;
+  surface?: Surface;
+}
+
+export type RequestAction = 'create' | 'get' | 'stream' | 'acknowledge' | 'complete';
+
+export interface ServiceHooks {
+  onCreated?: (session: CheckoutSession) => void;
+  /** Every API request with its client, for analytics later. Nothing consumes it yet. */
+  onRequest?: (request: { action: RequestAction; sessionId?: string; client: ClientContext }) => void;
+}
+
 /** Orchestrates the stubbed services around the pure state machine. All time comes from `deps.clock`. */
 export class CheckoutService {
   constructor(
     private readonly deps: AppDeps,
-    private readonly hooks: { onCreated?: (session: CheckoutSession) => void } = {},
+    private readonly hooks: ServiceHooks = {},
   ) {}
 
-  create(listingId: unknown): ApiResult {
+  create(listingId: unknown, client: ClientContext): ApiResult {
     if (typeof listingId !== 'string' || listingId === '') {
       return apiError(400, 'INVALID_REQUEST', 'listingId is required');
     }
+    // The origin is stored on the session, so unlike other calls a create must say who it is.
+    if (client.clientId === undefined) return apiError(400, 'INVALID_REQUEST', 'X-Client-Id header is required');
+    if (client.surface === undefined) return apiError(400, 'INVALID_REQUEST', 'X-Surface header must be web or mobile');
     const price = this.deps.pricing.getPrice(listingId);
     if (price === undefined) return apiError(404, 'LISTING_NOT_FOUND', `unknown listing ${listingId}`);
 
@@ -46,6 +63,9 @@ export class CheckoutService {
     const session: CheckoutSession = {
       id,
       listingId,
+      createdAt: this.deps.clock.now().toISOString(),
+      originClientId: client.clientId,
+      originSurface: client.surface,
       status: 'active',
       priceSnapshot: price,
       currentPrice: price,
@@ -55,6 +75,7 @@ export class CheckoutService {
     };
     this.deps.store.create(session);
     this.hooks.onCreated?.(session);
+    this.hooks.onRequest?.({ action: 'create', sessionId: id, client });
     return { status: 201, body: session };
   }
 
@@ -64,14 +85,22 @@ export class CheckoutService {
     return stored && this.refresh(stored);
   }
 
+  /** A client opens the live stream: the current state, re-evaluated. */
+  async open(id: string, client: ClientContext): Promise<CheckoutSession | undefined> {
+    this.hooks.onRequest?.({ action: 'stream', sessionId: id, client });
+    return this.refreshById(id);
+  }
+
   /** Resume: re-evaluates expiry, inventory and price before answering. */
-  async get(id: string): Promise<ApiResult> {
+  async get(id: string, client: ClientContext): Promise<ApiResult> {
+    this.hooks.onRequest?.({ action: 'get', sessionId: id, client });
     const stored = this.deps.store.get(id);
     if (!stored) return this.notFound(id);
     return { status: 200, body: await this.refresh(stored) };
   }
 
-  async acknowledge(id: string, version: unknown): Promise<ApiResult> {
+  async acknowledge(id: string, version: unknown, client: ClientContext): Promise<ApiResult> {
+    this.hooks.onRequest?.({ action: 'acknowledge', sessionId: id, client });
     if (typeof version !== 'number') return apiError(400, 'INVALID_REQUEST', 'version is required');
     const stored = this.deps.store.get(id);
     if (!stored) return this.notFound(id);
@@ -108,7 +137,8 @@ export class CheckoutService {
    * Result: same key -> same order; different key racing -> one wins, the other
    * is told the sale already happened (or to re-read), and the card is charged once.
    */
-  async complete(id: string, idempotencyKey: unknown, version: unknown): Promise<ApiResult> {
+  async complete(id: string, idempotencyKey: unknown, version: unknown, client: ClientContext): Promise<ApiResult> {
+    this.hooks.onRequest?.({ action: 'complete', sessionId: id, client });
     if (typeof idempotencyKey !== 'string' || idempotencyKey === '') {
       return apiError(400, 'INVALID_REQUEST', 'Idempotency-Key header is required');
     }

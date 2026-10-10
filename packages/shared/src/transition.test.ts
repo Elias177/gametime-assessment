@@ -12,6 +12,9 @@ function makeSession(status: SessionStatus, overrides: Partial<CheckoutSession> 
   return {
     id: 's1',
     listingId: 'l1',
+    createdAt: '2030-01-01T00:00:00.000Z',
+    originClientId: 'client-a',
+    originSurface: 'web',
     status,
     priceSnapshot: 10000,
     currentPrice: status === 'price_changed' ? 12000 : 10000,

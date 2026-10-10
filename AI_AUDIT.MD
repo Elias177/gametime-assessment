@@ -284,3 +284,34 @@ Log of what was asked and the results, one entry per task.
 - The countdown uses the client clock, so a skewed device clock shows a wrong time (display only).
 
 **Next:** Waiting for the next task.
+
+
+## Task 12: Split-screen demo, mobile view, and client origin
+
+**Asked:** Add `/resume/:sessionId` and a split-screen demo (desktop pane left, phone-frame pane right), each pane a separate client with its own `clientId` and hook instance; opening `/resume/:id` directly renders only the mobile view. Server: add `createdAt`, `originClientId`, `originSurface` to `CheckoutSession` at create time; send `X-Client-Id` / `X-Surface` on every API call (SSE: query params); read them in `app.ts` and pass them to the service for analytics later. Mobile UI: same states, recoveries in a bottom sheet, header "Opened from link" / "Started on this device", sticky Pay button.
+
+**Shared / server:**
+- `CheckoutSession` gains `createdAt` (ISO, from the injected clock), `originClientId` and `originSurface`. New `Surface` (`web | mobile`), `SURFACES`, `isSurface`.
+- `app.ts` reads `X-Client-Id` / `X-Surface` (SSE: `?clientId=&surface=`) and passes a `ClientContext` to every service method. `create` requires both and returns 400 `INVALID_REQUEST` if the client id is missing or the surface is not `web|mobile`, because the origin is stored on the session. Other calls tolerate a missing or unknown value (the context is simply empty), so a bad analytics header cannot break checkout.
+- `CheckoutService` calls an optional `onRequest({action, sessionId, client})` hook on every request (`create`, `get`, `stream`, `acknowledge`, `complete`). Nothing consumes it yet; it exists so analytics can attach later, and so tests can see what the service received. `createApp(deps, {onRequest})` passes it through.
+- The origin is set once at create and never changed by later requests from other clients.
+
+**Web:**
+- `api.ts`: every call takes a `ClientInfo` and sends the two headers; `eventsUrl()` puts them in the SSE query. `useCheckoutSession(id, {client, ...})` now requires `client`.
+- `clientId.ts`: `newClientId()`, and `tabClientId()` (sessionStorage, so it survives reloads and matches between the start screen and the pane; falls back to memory if storage is blocked).
+- Routes: `/checkout/:id` is the split demo (`SplitDemo`): the desktop pane uses the tab's id (surface `web`), the phone frame gets a fresh id made once with `useState` (surface `mobile`); each runs its own `useCheckoutSession`. `/resume/:id` renders only the mobile view, full screen, using the tab's id (surface `mobile`).
+- `CheckoutPane` picks the layout from `client.surface`. `MobileCheckoutView`: header "Opened from link" or "Started on this device" (`session.originClientId === client.clientId`), the same summary/price/countdown, inline processing and completed states, a sticky Pay bar, and a bottom sheet (`role="dialog"`) for the four recovery states (`price_changed`, `payment_failed`, `expired`, `unavailable`). The sheet has no dismiss because it is the only way forward. Shared pieces (`PriceBlock`, `CompletedPanel`, `ProcessingPanel`, `ListingSummary`, `alertFor`) were extracted from `CheckoutView` and reused. "Start again" on `/resume` stays on `/resume`.
+
+**Tests added:** server 7 (`origin.test.ts`): origin recorded at create; unchanged when another client reads/completes; 400s for a missing client id, a missing or unknown surface; a refused create takes no hold; headers reach the service on every call; a bad surface on a read does not fail it; SSE query params reach the service. Web 23: hook 3 (headers on every call, SSE URL, same id across re-renders; the existing SSE URL test updated), `MobileCheckoutView.test.tsx` 13, `App.test.tsx` 7 (split shows both layouts, distinct client ids and surfaces on every request including SSE, "Opened from link" on the phone even in the starting tab, `/resume` mobile-only, "Started on this device" when the tab's id is the origin). e2e now 5: split demo is live, per-pane client ids, paying on the desktop shows "Completed on another device" in the phone frame, the resume link opens only the mobile view as a second page, health. Existing tests that build sessions were updated for the new fields. Mutation check: giving both panes the same client id fails 2 App tests.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 63, web 62). `pnpm e2e` passed (5).
+- Real-browser check (scratch Playwright script, screenshots read): split layout, the 390px `/resume` page with its sticky Pay bar, and the completed-elsewhere states. With `PAYMENT_BEHAVIOR=fail`, a failed payment from the phone pane shows the bottom sheet over a dimmed page while the desktop pane shows its inline failure panel.
+
+**Known gaps / notes:**
+- The `price_changed`, `expired` and `unavailable` sheets are covered by unit tests only; the demo has no way to trigger them. `payment_failed` was seen in a browser.
+- A `payment_failed` reason is only known to the client that paid (it comes from that client's 402), so other panes show the generic "Your payment didn't go through."
+- Clients are not authenticated: `X-Client-Id` is whatever the caller says, so it is for analytics only, never for access control.
+- A phone started on `/` navigates to `/checkout/:id`, which shows the split demo even on a small screen; only `/resume/:id` is phone-only.
+- Phone-frame size is fixed (390x780); the frame scrolls its own content.
+
+**Next:** Waiting for the next task.

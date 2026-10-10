@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../src/clock';
 import { InMemoryInventoryService } from '../src/services/inventory';
 import { providerKey } from '../src/services/payment';
-import { LISTING, TTL_MS, complete, setup } from './helpers';
+import { LISTING, TTL_MS, complete, setup, startSession } from './helpers';
 
 describe('regression: hold stays in place while payment is pending', () => {
   it('keeps the unit reserved past the TTL, then lets A complete', async () => {
@@ -15,7 +15,7 @@ describe('regression: hold stays in place while payment is pending', () => {
     clock.advance(TTL_MS * 2);
 
     // Before the fix the lapsed hold stopped counting and B could take A's unit.
-    const b = await api.post('/api/sessions').send({ listingId: LISTING });
+    const b = await startSession(api);
     expect(b.status).toBe(409);
     expect(b.body.error.code).toBe('SOLD_OUT');
 
@@ -25,7 +25,7 @@ describe('regression: hold stays in place while payment is pending', () => {
     expect(settled.body.orderId).toEqual(expect.any(String));
 
     // The unit was sold to A, so it stays gone.
-    expect((await api.post('/api/sessions').send({ listingId: LISTING })).status).toBe(409);
+    expect((await startSession(api)).status).toBe(409);
     expect(deps.inventory.available(LISTING)).toBe(0);
   });
 });
@@ -41,7 +41,7 @@ describe('payment failure', () => {
     expect(failed.body.status).toBe('payment_failed');
 
     // Still inside the original TTL: the unit is held for A's retry.
-    expect((await api.post('/api/sessions').send({ listingId: LISTING })).status).toBe(409);
+    expect((await startSession(api)).status).toBe(409);
 
     deps.payment.setBehavior('succeed');
     clock.advance(1000);
@@ -62,7 +62,7 @@ describe('payment failure', () => {
     expect(failed.body.status).toBe('payment_failed');
 
     // The pin is gone and the TTL is long past, so the unit is free again.
-    const b = await api.post('/api/sessions').send({ listingId: LISTING });
+    const b = await startSession(api);
     expect(b.status).toBe(201);
 
     // A's next read sees the lapsed hold.

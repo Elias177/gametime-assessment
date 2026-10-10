@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { createSession } from './api';
+import type { ClientInfo } from './api';
 import { CheckoutView } from './CheckoutView';
+import { MobileCheckoutView } from './MobileCheckoutView';
 import { navigate } from './navigate';
 import { useCheckoutSession } from './useCheckoutSession';
 
-/** Wires one checkout session (via the hook) to the view. */
-export function CheckoutPane({ sessionId }: { sessionId: string }) {
-  const { session, listing, loading, error, connection, paidHere, acknowledge, complete } =
-    useCheckoutSession(sessionId);
+/**
+ * Wires one checkout session (via its own hook instance) to a view. Each pane is a separate client:
+ * `client` identifies it to the server, and its surface picks the desktop or the phone layout.
+ */
+export function CheckoutPane({ sessionId, client }: { sessionId: string; client: ClientInfo }) {
+  const { session, listing, loading, error, connection, paidHere, acknowledge, complete } = useCheckoutSession(
+    sessionId,
+    { client },
+  );
   const [busy, setBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
@@ -24,8 +31,8 @@ export function CheckoutPane({ sessionId }: { sessionId: string }) {
     if (!session) return;
     setStartError(null);
     try {
-      const res = await createSession(session.listingId);
-      if (res.ok) navigate(`/checkout/${res.body.id}`);
+      const res = await createSession(session.listingId, client);
+      if (res.ok) navigate(`${window.location.pathname.startsWith('/resume/') ? '/resume' : '/checkout'}/${res.body.id}`);
       else setStartError(res.body?.error.code === 'SOLD_OUT' ? 'Those seats were just taken.' : 'Could not start a new checkout.');
     } catch {
       setStartError("Can't reach the server. Please try again.");
@@ -46,21 +53,26 @@ export function CheckoutPane({ sessionId }: { sessionId: string }) {
     );
   }
 
+  const actions = {
+    session,
+    listing,
+    error,
+    paidHere,
+    connection,
+    busy,
+    onPay: run(complete),
+    onAcceptPrice: run(acknowledge),
+    onStartAgain: run(startAgain),
+    onBackToStart: () => navigate('/'),
+  };
+
   return (
     <>
-      <CheckoutView
-        session={session}
-        listing={listing}
-        error={error}
-        paidHere={paidHere}
-        connection={connection}
-        busy={busy}
-        resumeUrl={`${window.location.origin}/resume/${session.id}`}
-        onPay={run(complete)}
-        onAcceptPrice={run(acknowledge)}
-        onStartAgain={run(startAgain)}
-        onBackToStart={() => navigate('/')}
-      />
+      {client.surface === 'mobile' ? (
+        <MobileCheckoutView {...actions} startedHere={session.originClientId === client.clientId} />
+      ) : (
+        <CheckoutView {...actions} resumeUrl={`${window.location.origin}/resume/${session.id}`} />
+      )}
       {startError && (
         <p className="banner error" role="alert" data-testid="start-error">
           {startError}

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isTerminalStatus } from '@checkout/shared';
 import type { CheckoutSession, Listing } from '@checkout/shared';
-import { acknowledgeSession, completeSession, getListing, getSession } from './api';
-import type { ApiError, ApiResult } from './api';
+import { acknowledgeSession, completeSession, eventsUrl, getListing, getSession } from './api';
+import type { ApiError, ApiResult, ClientInfo } from './api';
 
 export type Connection = 'connecting' | 'sse' | 'polling';
 
 export interface UseCheckoutSessionOptions {
+  /** This pane's identity, sent with every request. Keep it stable for the life of the pane. */
+  client: ClientInfo;
   /** Makes idempotency keys; injectable so tests get predictable ones. */
   newKey?: () => string;
   /** Polling interval used when the SSE stream is unavailable. */
@@ -20,7 +22,7 @@ const NETWORK_ERROR: ApiError = { code: 'NETWORK_ERROR', message: 'could not rea
  * first fetch, then the SSE stream (falling back to polling if it fails), plus a refetch when
  * the window regains focus.
  */
-export function useCheckoutSession(id: string, options: UseCheckoutSessionOptions = {}) {
+export function useCheckoutSession(id: string, options: UseCheckoutSessionOptions) {
   const [session, setSession] = useState<CheckoutSession>();
   const [listing, setListing] = useState<Listing>();
   const [loading, setLoading] = useState(true);
@@ -50,7 +52,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
 
   const fetchSession = useCallback(async () => {
     try {
-      const res = await getSession(id);
+      const res = await getSession(id, optionsRef.current.client);
       if (idRef.current !== id) return;
       if (res.ok) applySession(res.body);
       else if (!sessionRef.current) setError(res.body?.error ?? NETWORK_ERROR);
@@ -88,7 +90,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
   useEffect(() => {
     if (!listingId) return;
     let cancelled = false;
-    getListing(listingId)
+    getListing(listingId, optionsRef.current.client)
       .then((res) => {
         if (!cancelled && res.ok) setListing(res.body);
       })
@@ -115,7 +117,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
     if (typeof EventSource === 'undefined') {
       startPolling();
     } else {
-      source = new EventSource(`/api/sessions/${id}/events`);
+      source = new EventSource(eventsUrl(id, optionsRef.current.client));
       source.addEventListener('session', (event) => {
         setConnection('sse');
         applySession(JSON.parse((event as MessageEvent<string>).data) as CheckoutSession);
@@ -163,7 +165,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
     const current = sessionRef.current;
     if (!current) return;
     try {
-      settle(await acknowledgeSession(id, current.version));
+      settle(await acknowledgeSession(id, current.version, optionsRef.current.client));
     } catch {
       setError(NETWORK_ERROR);
     }
@@ -180,7 +182,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
     if (!current) return;
     const key = (attemptKeyRef.current ??= (optionsRef.current.newKey ?? (() => crypto.randomUUID()))());
     try {
-      const res = await completeSession(id, key, current.version);
+      const res = await completeSession(id, key, current.version, optionsRef.current.client);
       if (!res.ok && res.status === 402 && res.body?.error.code === 'PAYMENT_FAILED') {
         attemptKeyRef.current = undefined;
       }

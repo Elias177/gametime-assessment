@@ -27,11 +27,25 @@ export function setup(options: InMemoryDepsOptions = {}) {
   const api = request(createAdaptorServer({ fetch: app.fetch }));
 
   const createSession = async () => {
-    const res = await api.post('/api/sessions').send({ listingId: LISTING });
+    const res = await startSession(api);
     expect(res.status).toBe(201);
     return res.body as { id: string; version: number };
   };
   return { clock, deps, app, api, createSession };
+}
+
+/** Identify the caller the way the web client does: `X-Client-Id` and `X-Surface` headers. */
+export function asClient<T extends { set: (name: string, value: string) => T }>(
+  req: T,
+  clientId = 'client-a',
+  surface = 'web',
+): T {
+  return req.set('X-Client-Id', clientId).set('X-Surface', surface);
+}
+
+/** POST /api/sessions as an identified client (the response is not asserted). */
+export function startSession(api: Api, listingId: string = LISTING, clientId = 'client-a', surface = 'web') {
+  return asClient(api.post('/api/sessions'), clientId, surface).send({ listingId });
 }
 
 /** POST /complete with the required `Idempotency-Key` header and client `version`. */

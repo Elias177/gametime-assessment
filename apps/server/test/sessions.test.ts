@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { providerKey } from '../src/services/payment';
-import { LISTING, MINUTE, TTL_MS, complete, setup } from './helpers';
+import { LISTING, MINUTE, TTL_MS, complete, setup, startSession } from './helpers';
 
 describe('happy path', () => {
   it('creates a session with a hold, resumes it unchanged, and completes it', async () => {
     const { api, clock, deps } = setup();
 
-    const created = await api.post('/api/sessions').send({ listingId: LISTING });
+    const created = await startSession(api);
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({
       listingId: LISTING,
@@ -55,7 +55,7 @@ describe('expiry on resume', () => {
     });
 
     // The only unit is back on the shelf.
-    const second = await api.post('/api/sessions').send({ listingId: LISTING });
+    const second = await startSession(api);
     expect(second.status).toBe(201);
   });
 
@@ -146,7 +146,7 @@ describe('sold out', () => {
   it('refuses to create a session when nothing is in stock', async () => {
     const { api } = setup({ stock: { [LISTING]: 0 } });
 
-    const res = await api.post('/api/sessions').send({ listingId: LISTING });
+    const res = await startSession(api);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('SOLD_OUT');
   });
@@ -155,7 +155,7 @@ describe('sold out', () => {
     const { api, createSession } = setup();
     await createSession();
 
-    const second = await api.post('/api/sessions').send({ listingId: LISTING });
+    const second = await startSession(api);
     expect(second.status).toBe(409);
   });
 
@@ -238,7 +238,7 @@ describe('request validation', () => {
 
     expect((await api.get('/api/sessions/nope')).status).toBe(404);
     expect((await complete(api, 'nope', 'k', 1)).status).toBe(404);
-    expect((await api.post('/api/sessions').send({ listingId: 'ghost' })).status).toBe(404);
+    expect((await startSession(api, 'ghost')).status).toBe(404);
   });
 
   it('400s on missing fields and malformed JSON', async () => {

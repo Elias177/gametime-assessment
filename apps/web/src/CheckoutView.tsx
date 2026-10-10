@@ -38,7 +38,17 @@ export function describeError(error: ApiError): string {
   }
 }
 
-const humanize = (reason: string) => reason.replace(/_/g, ' ');
+export const humanize = (reason: string) => reason.replace(/_/g, ' ');
+
+/**
+ * The action error worth showing as an alert, or null. A failed payment is explained by its own
+ * panel, and a stale error on a finished session is noise.
+ */
+export function alertFor(error: ApiError | null, status: CheckoutSession['status']): string | null {
+  const finished = status === 'completed' || status === 'expired' || status === 'unavailable';
+  if (!error || finished || (error.code === 'PAYMENT_FAILED' && status === 'payment_failed')) return null;
+  return describeError(error);
+}
 
 export function CheckoutView(props: CheckoutViewProps) {
   const { session, listing, error, connection, busy } = props;
@@ -48,11 +58,7 @@ export function CheckoutView(props: CheckoutViewProps) {
   const finished = status === 'completed' || status === 'expired' || status === 'unavailable';
   const priceChanged = status === 'price_changed';
 
-  // A failed payment is explained by its own panel; stale errors on a finished session are noise.
-  const alert =
-    error && !finished && !(error.code === 'PAYMENT_FAILED' && status === 'payment_failed')
-      ? describeError(error)
-      : null;
+  const alert = alertFor(error, status);
 
   return (
     <section className="pane" data-testid="checkout-pane" data-status={status}>
@@ -63,20 +69,7 @@ export function CheckoutView(props: CheckoutViewProps) {
 
       {listing ? <ListingSummary listing={listing} /> : <p className="muted">Loading event details…</p>}
 
-      <div className="price" aria-label="Price">
-        {priceChanged ? (
-          <>
-            <s className="price-old" data-testid="price-old">
-              {formatPrice(session.priceSnapshot)}
-            </s>{' '}
-            <strong className="price-new" data-testid="price">
-              {formatPrice(session.currentPrice)}
-            </strong>
-          </>
-        ) : (
-          <strong data-testid="price">{formatPrice(session.priceSnapshot)}</strong>
-        )}
-      </div>
+      <PriceBlock session={session} />
 
       {showCountdown && (
         <p className="muted" data-testid="countdown">
@@ -128,9 +121,7 @@ function StatusPanel({ session, error, paidHere, busy, onPay, onStartAgain, onBa
     case 'payment_pending':
       return (
         <>
-          <p className="processing" role="status" data-testid="processing">
-            <span className="spinner" aria-hidden="true" /> Processing payment…
-          </p>
+          <ProcessingPanel />
           <button type="button" className="primary" data-testid="pay" disabled>
             Pay
           </button>
@@ -174,31 +165,63 @@ function StatusPanel({ session, error, paidHere, busy, onPay, onStartAgain, onBa
       );
 
     case 'completed':
-      return paidHere ? (
-        <div className="banner ok" role="status" data-testid="confirmation">
-          <p>
-            <strong>Order confirmed</strong>
-          </p>
-          <p>
-            Order number: <code data-testid="order-id">{session.orderId}</code>
-          </p>
-        </div>
-      ) : (
-        <div className="banner ok" role="status" data-testid="completed-elsewhere">
-          <p>
-            <strong>Completed on another device</strong>
-          </p>
-          {session.orderId && (
-            <p>
-              Order number: <code data-testid="order-id">{session.orderId}</code>
-            </p>
-          )}
-        </div>
-      );
+      return <CompletedPanel session={session} paidHere={paidHere} />;
   }
 }
 
-function ListingSummary({ listing }: { listing: Listing }) {
+export function PriceBlock({ session }: { session: CheckoutSession }) {
+  return (
+    <div className="price" aria-label="Price">
+      {session.status === 'price_changed' ? (
+        <>
+          <s className="price-old" data-testid="price-old">
+            {formatPrice(session.priceSnapshot)}
+          </s>{' '}
+          <strong className="price-new" data-testid="price">
+            {formatPrice(session.currentPrice)}
+          </strong>
+        </>
+      ) : (
+        <strong data-testid="price">{formatPrice(session.priceSnapshot)}</strong>
+      )}
+    </div>
+  );
+}
+
+export function ProcessingPanel() {
+  return (
+    <p className="processing" role="status" data-testid="processing">
+      <span className="spinner" aria-hidden="true" /> Processing payment…
+    </p>
+  );
+}
+
+/** The order confirmation when this client paid, or the "someone else paid" notice. */
+export function CompletedPanel({ session, paidHere }: { session: CheckoutSession; paidHere: boolean }) {
+  return paidHere ? (
+    <div className="banner ok" role="status" data-testid="confirmation">
+      <p>
+        <strong>Order confirmed</strong>
+      </p>
+      <p>
+        Order number: <code data-testid="order-id">{session.orderId}</code>
+      </p>
+    </div>
+  ) : (
+    <div className="banner ok" role="status" data-testid="completed-elsewhere">
+      <p>
+        <strong>Completed on another device</strong>
+      </p>
+      {session.orderId && (
+        <p>
+          Order number: <code data-testid="order-id">{session.orderId}</code>
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function ListingSummary({ listing }: { listing: Listing }) {
   return (
     <dl className="listing" data-testid="listing">
       <dt>Venue</dt>
@@ -214,7 +237,7 @@ function ListingSummary({ listing }: { listing: Listing }) {
   );
 }
 
-function ConnectionIndicator({ connection }: { connection: Connection }) {
+export function ConnectionIndicator({ connection }: { connection: Connection }) {
   const label = connection === 'sse' ? 'live' : connection === 'polling' ? 'polling' : 'connecting';
   return (
     <span className={`connection ${label}`} data-testid="connection" title="How this page receives updates">

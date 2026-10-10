@@ -2,6 +2,7 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { CheckoutSession, Listing } from '@checkout/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ClientInfo } from './api';
 import { useCheckoutSession } from './useCheckoutSession';
 
 const listing: Listing = {
@@ -17,6 +18,9 @@ const listing: Listing = {
 const makeSession = (overrides: Partial<CheckoutSession> = {}): CheckoutSession => ({
   id: 's1',
   listingId: 'l1',
+  createdAt: '2030-01-01T00:00:00.000Z',
+  originClientId: 'client-a',
+  originSurface: 'web',
   status: 'active',
   priceSnapshot: 10000,
   currentPrice: 10000,
@@ -60,6 +64,8 @@ interface Recorded {
   method: string;
   path: string;
   key?: string;
+  clientId?: string;
+  surface?: string;
   body?: { version?: number };
 }
 
@@ -78,6 +84,8 @@ function installFakeServer(initial: CheckoutSession) {
         method: init?.method ?? 'GET',
         path,
         key: headers['Idempotency-Key'],
+        clientId: headers['X-Client-Id'],
+        surface: headers['X-Surface'],
         body: init?.body ? JSON.parse(init.body as string) : undefined,
       });
       if (path.endsWith('/complete')) return state.complete();
@@ -94,9 +102,13 @@ const completes = (state: ReturnType<typeof installFakeServer>) =>
 const sessionFetches = (state: ReturnType<typeof installFakeServer>) =>
   state.requests.filter((r) => r.method === 'GET' && r.path === '/api/sessions/s1');
 
-async function mount(options: { pollMs?: number } = {}) {
+const CLIENT: ClientInfo = { clientId: 'pane-1', surface: 'web' };
+
+async function mount(options: { pollMs?: number; client?: ClientInfo } = {}) {
   let n = 0;
-  const hook = renderHook(() => useCheckoutSession('s1', { newKey: () => `key-${++n}`, ...options }));
+  const hook = renderHook(() =>
+    useCheckoutSession('s1', { client: CLIENT, newKey: () => `key-${++n}`, ...options }),
+  );
   await waitFor(() => expect(hook.result.current.loading).toBe(false));
   return hook;
 }
@@ -111,6 +123,44 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('client identity', () => {
+  it('sends X-Client-Id and X-Surface on every API call and in the SSE URL', async () => {
+    const state = installFakeServer(makeSession({ status: 'price_changed', currentPrice: 12000, version: 2 }));
+    const client: ClientInfo = { clientId: 'phone-pane', surface: 'mobile' };
+    const { result } = await mount({ client });
+    await waitFor(() => expect(result.current.listing).toEqual(listing));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.acknowledge();
+    });
+    await act(async () => {
+      await result.current.complete();
+    });
+
+    // listing fetch, session fetch, acknowledge and complete: all identified.
+    expect(state.requests.map((r) => r.path)).toEqual(
+      expect.arrayContaining(['/api/sessions/s1', '/api/listings/l1', '/api/sessions/s1/acknowledge', '/api/sessions/s1/complete']),
+    );
+    for (const request of state.requests) {
+      expect([request.path, request.clientId, request.surface]).toEqual([request.path, 'phone-pane', 'mobile']);
+    }
+    expect(FakeEventSource.instances[0]!.url).toBe('/api/sessions/s1/events?clientId=phone-pane&surface=mobile');
+  });
+
+  it('keeps the same client id for the whole life of the pane, across re-renders', async () => {
+    const state = installFakeServer(makeSession());
+    const { result, rerender } = await mount();
+
+    rerender();
+    await act(async () => {
+      await result.current.complete();
+    });
+
+    expect(new Set(state.requests.map((r) => r.clientId))).toEqual(new Set(['pane-1']));
+  });
+});
+
 describe('loading and live updates', () => {
   it('fetches the session and its listing, then subscribes to SSE', async () => {
     installFakeServer(makeSession());
@@ -119,7 +169,7 @@ describe('loading and live updates', () => {
     expect(result.current.session).toMatchObject({ id: 's1', status: 'active' });
     await waitFor(() => expect(result.current.listing).toEqual(listing));
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    expect(FakeEventSource.instances[0]!.url).toBe('/api/sessions/s1/events');
+    expect(FakeEventSource.instances[0]!.url).toBe('/api/sessions/s1/events?clientId=pane-1&surface=web');
   });
 
   it('applies sessions pushed over SSE, ignores older ones, and closes the stream when finished', async () => {
