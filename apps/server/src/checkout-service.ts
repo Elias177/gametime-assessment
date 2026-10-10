@@ -122,6 +122,8 @@ export class CheckoutService {
       const latest = this.latest(session);
       return (await this.existingOutcome(latest, idempotencyKey)) ?? conflict(latest);
     }
+    // The hold must outlive its TTL while the charge is in flight, or the unit could be resold mid-payment.
+    this.deps.inventory.pin(id);
 
     const outcome = await this.deps.payment.charge({
       sessionId: id,
@@ -212,6 +214,8 @@ export class CheckoutService {
 
     if (!this.deps.store.save(result.session, session.version)) return this.latest(session);
     if (outcome.status === 'succeeded') this.deps.inventory.confirm(session.id);
+    // On failure the hold goes back to its normal TTL: the buyer can retry until it lapses.
+    else this.deps.inventory.unpin(session.id);
     return result.session;
   }
 }

@@ -17,6 +17,13 @@ export interface InventoryService {
   /** Reserve one unit for `ownerId` (a session id) for `ttlMs`. */
   hold(listingId: string, ownerId: string, ttlMs: number): HoldResult;
   status(ownerId: string): HoldStatus;
+  /**
+   * Keep the hold live past its TTL, until `confirm`, `release` or `unpin`. Used while a payment
+   * is in flight, so the unit can't be sold to someone else mid-charge.
+   */
+  pin(ownerId: string): void;
+  /** Drop the pin: the hold goes back to expiring at its original TTL (which may already have passed). */
+  unpin(ownerId: string): void;
   /** Give the unit back. Safe to call repeatedly. */
   release(ownerId: string): void;
   /** Consume the unit permanently after a successful sale. */
@@ -25,6 +32,7 @@ export interface InventoryService {
 
 interface StoredHold extends Hold {
   lost: boolean;
+  pinned: boolean;
 }
 
 export class InMemoryInventoryService implements InventoryService {
@@ -47,6 +55,7 @@ export class InMemoryInventoryService implements InventoryService {
       listingId,
       expiresAt: new Date(this.clock.now().getTime() + ttlMs),
       lost: false,
+      pinned: false,
     };
     this.holds.set(ownerId, hold);
     return { ok: true, hold: { ownerId, listingId, expiresAt: hold.expiresAt } };
@@ -55,7 +64,18 @@ export class InMemoryInventoryService implements InventoryService {
   status(ownerId: string): HoldStatus {
     const hold = this.holds.get(ownerId);
     if (!hold || hold.lost) return 'lost';
+    if (hold.pinned) return 'held';
     return this.clock.now().getTime() >= hold.expiresAt.getTime() ? 'expired' : 'held';
+  }
+
+  pin(ownerId: string): void {
+    const hold = this.holds.get(ownerId);
+    if (hold && !hold.lost) hold.pinned = true;
+  }
+
+  unpin(ownerId: string): void {
+    const hold = this.holds.get(ownerId);
+    if (hold) hold.pinned = false;
   }
 
   release(ownerId: string): void {
@@ -69,12 +89,13 @@ export class InMemoryInventoryService implements InventoryService {
     this.holds.delete(ownerId);
   }
 
-  /** Units neither sold nor under a live hold. */
+  /** Units neither sold nor under a live (unexpired or pinned) hold. */
   available(listingId: string): number {
     const now = this.clock.now().getTime();
     let held = 0;
     for (const hold of this.holds.values()) {
-      if (hold.listingId === listingId && !hold.lost && hold.expiresAt.getTime() > now) held += 1;
+      const live = !hold.lost && (hold.pinned || hold.expiresAt.getTime() > now);
+      if (hold.listingId === listingId && live) held += 1;
     }
     return (this.stock.get(listingId) ?? 0) - held;
   }

@@ -202,3 +202,26 @@ Log of what was asked and the results, one entry per task.
 **Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 32). `pnpm e2e` passed (1).
 
 **Next:** Waiting for the next task.
+
+
+## Task 9: Keep the inventory hold in place while payment is pending
+
+**Asked:** A session in `payment_pending` keeps going after its hold lapses, but `available()` stops counting that hold, so another session can take the same unit and both can complete. Add `pin(ownerId)` to `InventoryService`, call it on `PAYMENT_STARTED`, make `available()`/`status()` treat a pinned hold as live until `confirm()` or `release()`, and release the hold on payment failure. Regression test with stock 1: A goes pending, time passes the TTL, B's create returns 409 `SOLD_OUT`, A settles to completed.
+
+**Decision (asked, user chose):** "Release on failure" conflicts with retry from `payment_failed`: a released hold makes the next read mark the session `unavailable`. Chosen: on failure, **unpin** instead of releasing. The hold returns to its normal TTL, so the buyer can retry until it lapses. If the TTL has already passed, the unit is free immediately and the session expires on its next read. `release()` is still used on expiry and inventory loss.
+
+**Result:**
+- `apps/server/src/services/inventory.ts`: `pin(ownerId)` and `unpin(ownerId)` on the interface and the in-memory impl. A pinned hold counts in `available()` and reports `held` from `status()` regardless of TTL, until `confirm`, `release` or `unpin`. A hold that was revoked (`lost`) can't be pinned back to life.
+- `apps/server/src/checkout-service.ts`: `complete()` pins right after the `PAYMENT_STARTED` save succeeds. `applyPayment()` unpins on failure (and `confirm()` on success, as before). This covers both the direct charge result and a pending payment settled on a later read.
+- `apps/server/test/payment-hold.test.ts` (new, 8 tests):
+  - the regression from the request (stock 1, A pending, TTL passes twice over, B gets 409 `SOLD_OUT`, A settles to completed, the unit stays sold);
+  - failure within the TTL: the unit stays held and A can retry;
+  - failure after the TTL: the unit frees up, B can create a session, and A's next read is `expired`;
+  - unit tests for pin, confirm, release, unpin, a revoked hold, and an unknown owner.
+- Mutation check: with the `pin()` call removed, the regression test fails (restored afterwards).
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 74, server 40). `pnpm e2e` passed (1).
+
+**Caveat:** a payment that stays `pending` forever now holds the unit forever. There is no timeout on pending payments yet.
+
+**Next:** Waiting for the next task.
