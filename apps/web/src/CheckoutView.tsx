@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { CheckoutSession, Listing } from '@checkout/shared';
 import type { ApiError } from './api';
+import { formatSeats } from '@checkout/shared';
 import { formatCountdown, formatEventDate, formatPrice } from './format';
 import { useCountdown } from './useCountdown';
 import type { Connection } from './useCheckoutSession';
@@ -16,6 +17,8 @@ export interface CheckoutViewProps {
   busy: boolean;
   /** Link to continue this checkout on another device. */
   resumeUrl: string;
+  /** The price shown came from a pre-rendered page and has not been confirmed by the server yet. */
+  confirmingPrice?: boolean;
   onPay: () => void;
   onAcceptPrice: () => void;
   onStartAgain: () => void;
@@ -69,7 +72,7 @@ export function CheckoutView(props: CheckoutViewProps) {
 
       {listing ? <ListingSummary listing={listing} /> : <p className="muted">Loading event details…</p>}
 
-      <PriceBlock session={session} />
+      <PriceBlock session={session} confirming={props.confirmingPrice} />
 
       {showCountdown && (
         <p className="muted" data-testid="countdown">
@@ -102,7 +105,7 @@ export function CheckoutView(props: CheckoutViewProps) {
   );
 }
 
-function StatusPanel({ session, error, paidHere, busy, onPay, onStartAgain, onBackToStart }: CheckoutViewProps) {
+function StatusPanel({ session, error, paidHere, busy, confirmingPrice, onPay, onStartAgain, onBackToStart }: CheckoutViewProps) {
   switch (session.status) {
     case 'active':
     case 'price_changed':
@@ -111,7 +114,7 @@ function StatusPanel({ session, error, paidHere, busy, onPay, onStartAgain, onBa
           type="button"
           className="primary"
           data-testid="pay"
-          disabled={session.status === 'price_changed' || busy}
+          disabled={session.status === 'price_changed' || busy || confirmingPrice}
           onClick={onPay}
         >
           Pay {formatPrice(session.status === 'price_changed' ? session.currentPrice : session.priceSnapshot)}
@@ -169,7 +172,11 @@ function StatusPanel({ session, error, paidHere, busy, onPay, onStartAgain, onBa
   }
 }
 
-export function PriceBlock({ session }: { session: CheckoutSession }) {
+/**
+ * The price. While `confirming`, it is only the last-seen number from the pre-rendered page, so it
+ * is labelled as such (on the same line, so nothing moves when the label goes).
+ */
+export function PriceBlock({ session, confirming = false }: { session: CheckoutSession; confirming?: boolean }) {
   return (
     <div className="price" aria-label="Price">
       {session.status === 'price_changed' ? (
@@ -183,6 +190,14 @@ export function PriceBlock({ session }: { session: CheckoutSession }) {
         </>
       ) : (
         <strong data-testid="price">{formatPrice(session.priceSnapshot)}</strong>
+      )}
+      {confirming && (
+        <>
+          {' '}
+          <span className="confirming" data-testid="confirming-price">
+            Confirming price…
+          </span>
+        </>
       )}
     </div>
   );
@@ -230,8 +245,7 @@ export function ListingSummary({ listing }: { listing: Listing }) {
       <dd>{formatEventDate(listing.date, listing.timeZone)}</dd>
       <dt>Seats</dt>
       <dd>
-        Section {listing.section}, Row {listing.row}, {listing.seats.length === 1 ? 'Seat' : 'Seats'}{' '}
-        {listing.seats.join(', ')}
+        {formatSeats(listing)}
       </dd>
     </dl>
   );

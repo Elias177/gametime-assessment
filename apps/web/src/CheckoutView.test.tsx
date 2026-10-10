@@ -77,6 +77,22 @@ describe('summary', () => {
   });
 });
 
+describe('confirming the price', () => {
+  it('labels the price and locks Pay while the price is unconfirmed', () => {
+    renderView(makeSession(), { confirmingPrice: true });
+
+    expect(screen.getByTestId('confirming-price').textContent).toBe('Confirming price…');
+    expect((screen.getByTestId('pay') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows neither once confirmed', () => {
+    renderView(makeSession());
+
+    expect(screen.queryByTestId('confirming-price')).toBeNull();
+    expect((screen.getByTestId('pay') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 describe('per-state UI', () => {
   it('active: Pay is enabled', () => {
     const { onPay } = renderView(makeSession());

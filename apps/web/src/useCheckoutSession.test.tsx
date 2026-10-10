@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import type { CheckoutSession, Listing } from '@checkout/shared';
+import type { CheckoutSession, Listing, ResumeInitialState } from '@checkout/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientInfo } from './api';
 import { useCheckoutSession } from './useCheckoutSession';
@@ -75,6 +75,10 @@ function installFakeServer(initial: CheckoutSession) {
     session: initial,
     requests: [] as Recorded[],
     complete: (): Response | Promise<Response> => json(200, initial),
+    /** Hold GET /api/sessions/:id until this resolves, to test what shows before the live answer. */
+    gate: undefined as Promise<void> | undefined,
+    /** Overrides the GET /api/sessions/:id answer (default: `state.session` as 200). */
+    sessionReply: undefined as (() => Response) | undefined,
   };
   vi.stubGlobal(
     'fetch',
@@ -90,7 +94,10 @@ function installFakeServer(initial: CheckoutSession) {
       });
       if (path.endsWith('/complete')) return state.complete();
       if (path.startsWith('/api/listings/')) return json(200, listing);
-      if (path.startsWith('/api/sessions/')) return json(200, state.session);
+      if (path.startsWith('/api/sessions/')) {
+        await state.gate;
+        return state.sessionReply ? state.sessionReply() : json(200, state.session);
+      }
       return json(404, { error: { code: 'NOT_FOUND', message: path } });
     }),
   );
@@ -104,7 +111,7 @@ const sessionFetches = (state: ReturnType<typeof installFakeServer>) =>
 
 const CLIENT: ClientInfo = { clientId: 'pane-1', surface: 'web' };
 
-async function mount(options: { pollMs?: number; client?: ClientInfo } = {}) {
+async function mount(options: { pollMs?: number; client?: ClientInfo; initialState?: ResumeInitialState } = {}) {
   let n = 0;
   const hook = renderHook(() =>
     useCheckoutSession('s1', { client: CLIENT, newKey: () => `key-${++n}`, ...options }),
@@ -511,5 +518,162 @@ describe('action errors', () => {
     });
 
     await waitFor(() => expect(result.current.error).toBeNull());
+  });
+});
+
+describe('initialState (a pre-rendered page)', () => {
+  const prerendered = (overrides: Partial<CheckoutSession> = {}): ResumeInitialState => ({
+    session: makeSession(overrides),
+    listing,
+  });
+
+  it('starts from it: no loading state, the session and listing at once, price unconfirmed', async () => {
+    const state = installFakeServer(makeSession());
+    state.gate = new Promise(() => undefined); // the live answer never comes in this test
+
+    const hook = renderHook(() => useCheckoutSession('s1', { client: CLIENT, initialState: prerendered() }));
+
+    expect(hook.result.current.loading).toBe(false);
+    expect(hook.result.current.session).toMatchObject({ id: 's1', status: 'active' });
+    expect(hook.result.current.listing).toEqual(listing);
+    expect(hook.result.current.confirmed).toBe(false);
+    expect(hook.result.current.error).toBeNull();
+  });
+
+  it('does not fetch the listing, but still fetches the session and then opens SSE', async () => {
+    const state = installFakeServer(makeSession());
+    await mount({ initialState: prerendered() });
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    expect(sessionFetches(state)).toHaveLength(1);
+    expect(state.requests.filter((r) => r.path.startsWith('/api/listings/'))).toEqual([]);
+    expect(FakeEventSource.instances[0]!.url).toBe('/api/sessions/s1/events?clientId=pane-1&surface=web');
+  });
+
+  it('stays unconfirmed until the first live response, then confirms', async () => {
+    const state = installFakeServer(makeSession());
+    let release!: () => void;
+    state.gate = new Promise<void>((resolve) => (release = resolve));
+    const { result } = await mount({ initialState: prerendered() });
+    expect(result.current.confirmed).toBe(false);
+    expect(FakeEventSource.instances).toHaveLength(0); // the stream waits for the live fetch
+
+    release();
+
+    await waitFor(() => expect(result.current.confirmed).toBe(true));
+    expect(result.current.session).toMatchObject({ status: 'active', version: 1 });
+  });
+
+  it('lets the live session replace the pre-rendered one: price changed', async () => {
+    const state = installFakeServer(makeSession({ status: 'price_changed', currentPrice: 12000, version: 2 }));
+    let release!: () => void;
+    state.gate = new Promise<void>((resolve) => (release = resolve));
+    const { result } = await mount({ initialState: prerendered() }); // pre-rendered: active at $100
+    expect(result.current.session).toMatchObject({ status: 'active', currentPrice: 10000 });
+
+    release();
+
+    await waitFor(() => expect(result.current.confirmed).toBe(true));
+    expect(result.current.session).toMatchObject({ status: 'price_changed', currentPrice: 12000, version: 2 });
+  });
+
+  it('lets the live session replace the pre-rendered one: expired', async () => {
+    installFakeServer(makeSession({ status: 'expired', version: 2 }));
+    const { result } = await mount({ initialState: prerendered() });
+
+    await waitFor(() => expect(result.current.session?.status).toBe('expired'));
+    expect(result.current.confirmed).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(FakeEventSource.instances).toHaveLength(0); // finished: no stream
+  });
+
+  it('the first live answer wins even if its version is older (the server was reset or restarted)', async () => {
+    installFakeServer(makeSession({ version: 1, priceSnapshot: 9000, currentPrice: 9000 }));
+    const { result } = await mount({
+      initialState: prerendered({ version: 5, priceSnapshot: 10000, currentPrice: 10000 }),
+    });
+
+    await waitFor(() => expect(result.current.confirmed).toBe(true));
+    expect(result.current.session).toMatchObject({ version: 1, priceSnapshot: 9000 });
+  });
+
+  it('after that, older updates are ignored again', async () => {
+    installFakeServer(makeSession({ version: 3 }));
+    const { result } = await mount({ initialState: prerendered({ version: 2 }) });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await waitFor(() => expect(result.current.confirmed).toBe(true));
+
+    act(() => FakeEventSource.instances[0]!.emit('session', makeSession({ version: 2, priceSnapshot: 1 })));
+
+    expect(result.current.session).toMatchObject({ version: 3, priceSnapshot: 10000 });
+  });
+
+  it('drops the pre-rendered session if the live fetch says it no longer exists', async () => {
+    const state = installFakeServer(makeSession());
+    state.sessionReply = () => json(404, { error: { code: 'SESSION_NOT_FOUND', message: 'no session s1' } });
+    const { result } = await mount({ initialState: prerendered() });
+
+    await waitFor(() => expect(result.current.session).toBeUndefined());
+    expect(result.current.error).toMatchObject({ code: 'SESSION_NOT_FOUND' });
+    expect(result.current.loading).toBe(false);
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it('keeps the pre-rendered session, still unconfirmed, when the live fetch fails for another reason', async () => {
+    const state = installFakeServer(makeSession());
+    state.sessionReply = () => json(500, { error: { code: 'BOOM', message: 'x' } });
+    const { result } = await mount({ initialState: prerendered() });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(result.current.session).toMatchObject({ id: 's1' });
+    expect(result.current.confirmed).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('ignores an initial state that is for a different session', async () => {
+    const state = installFakeServer(makeSession());
+    state.gate = new Promise(() => undefined);
+
+    const { result } = renderHook(() =>
+      useCheckoutSession('s1', { client: CLIENT, initialState: { session: makeSession({ id: 'other' }), listing } }),
+    );
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.session).toBeUndefined();
+    expect(result.current.confirmed).toBe(true); // nothing pre-rendered to doubt
+  });
+
+  it('without an initial state nothing is unconfirmed, and the listing is fetched', async () => {
+    const state = installFakeServer(makeSession());
+    const { result } = await mount();
+
+    expect(result.current.confirmed).toBe(true);
+    await waitFor(() => expect(result.current.listing).toEqual(listing));
+    expect(state.requests.some((r) => r.path === '/api/listings/l1')).toBe(true);
+  });
+
+  it('fetches the listing when the pre-rendered state has none', async () => {
+    const state = installFakeServer(makeSession());
+    const { result } = renderHook(() =>
+      useCheckoutSession('s1', { client: CLIENT, initialState: { session: makeSession() } }),
+    );
+
+    expect(result.current.listing).toBeUndefined(); // first render: nothing pre-rendered to show
+    await waitFor(() => expect(result.current.listing).toEqual(listing));
+    expect(state.requests.some((r) => r.path === '/api/listings/l1')).toBe(true);
+  });
+
+  it('pays with the freshest version once confirmed, not the pre-rendered one', async () => {
+    const state = installFakeServer(makeSession({ version: 2 }));
+    state.complete = () =>
+      json(200, makeSession({ status: 'completed', version: 3, orderId: 'o1', idempotencyKey: 'key-1' }));
+    const { result } = await mount({ initialState: prerendered({ version: 1 }) });
+    await waitFor(() => expect(result.current.confirmed).toBe(true));
+
+    await act(async () => {
+      await result.current.complete();
+    });
+
+    expect(completes(state)[0]!.body).toEqual({ version: 2 });
   });
 });

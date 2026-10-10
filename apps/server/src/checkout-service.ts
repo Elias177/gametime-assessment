@@ -25,6 +25,12 @@ const conflict = (session: CheckoutSession): ApiResult =>
 export interface ClientContext {
   clientId?: string;
   surface?: Surface;
+  /**
+   * True for the page pre-render's `X-Prefetch: 1` read of a session. It is the server asking on a
+   * fan's behalf, not a client, so analytics should not count it as a visit. Only `GET /api/sessions/:id`
+   * accepts it.
+   */
+  prefetch?: true;
 }
 
 export type RequestAction = 'create' | 'get' | 'stream' | 'acknowledge' | 'complete';

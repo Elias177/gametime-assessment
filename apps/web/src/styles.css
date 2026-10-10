@@ -436,3 +436,10 @@ code {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* The last-seen price from a pre-rendered page, until the server confirms it. */
+.confirming {
+  font-size: 0.875rem;
+  font-weight: normal;
+  color: var(--muted);
+}

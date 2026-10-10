@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createSession } from './api';
+import type { ResumeInitialState } from '@checkout/shared';
 import type { ClientInfo } from './api';
 import { CheckoutView } from './CheckoutView';
 import { MobileCheckoutView } from './MobileCheckoutView';
@@ -10,11 +11,18 @@ import { useCheckoutSession } from './useCheckoutSession';
  * Wires one checkout session (via its own hook instance) to a view. Each pane is a separate client:
  * `client` identifies it to the server, and its surface picks the desktop or the phone layout.
  */
-export function CheckoutPane({ sessionId, client }: { sessionId: string; client: ClientInfo }) {
-  const { session, listing, loading, error, connection, paidHere, acknowledge, complete } = useCheckoutSession(
-    sessionId,
-    { client },
-  );
+export function CheckoutPane({
+  sessionId,
+  client,
+  initialState,
+}: {
+  sessionId: string;
+  client: ClientInfo;
+  /** The pre-rendered state this page started from (only `/resume` has one). */
+  initialState?: ResumeInitialState;
+}) {
+  const { session, listing, loading, error, connection, paidHere, confirmed, acknowledge, complete } =
+    useCheckoutSession(sessionId, { client, initialState });
   const [busy, setBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
@@ -60,6 +68,7 @@ export function CheckoutPane({ sessionId, client }: { sessionId: string; client:
     paidHere,
     connection,
     busy,
+    confirmingPrice: !confirmed,
     onPay: run(complete),
     onAcceptPrice: run(acknowledge),
     onStartAgain: run(startAgain),

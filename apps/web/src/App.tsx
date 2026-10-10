@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { ResumeInitialState } from '@checkout/shared';
 import { newClientId, tabClient } from './clientId';
 import { ChaosPanel } from './ChaosPanel';
 import { CheckoutPane } from './CheckoutPane';
@@ -10,16 +11,17 @@ const RESUME_ROUTE = /^\/resume\/([^/]+)$/;
 
 /**
  * `/checkout/:id` is the demo: a desktop pane and a phone-frame pane side by side, on the same
- * session. `/resume/:id` is the link handed to a real second device, so it shows only the phone view.
+ * session. `/resume/:id` is the link handed to a real second device, so it shows only the phone view,
+ * and is the only route that can start from a pre-rendered `initialState` (the demo never does).
  */
-export function App() {
+export function App({ initialState }: { initialState?: ResumeInitialState } = {}) {
   const path = usePath();
   const checkout = CHECKOUT_ROUTE.exec(path);
   const resume = RESUME_ROUTE.exec(path);
 
   if (resume) {
     const id = decodeURIComponent(resume[1]!);
-    return <ResumeScreen key={id} sessionId={id} />;
+    return <ResumeScreen key={id} sessionId={id} initialState={initialState} />;
   }
   if (checkout) {
     const id = decodeURIComponent(checkout[1]!);
@@ -55,11 +57,11 @@ function SplitDemo({ sessionId }: { sessionId: string }) {
 }
 
 /** A real second device: the phone layout fills the screen, with this tab's own identity. */
-function ResumeScreen({ sessionId }: { sessionId: string }) {
+function ResumeScreen({ sessionId, initialState }: { sessionId: string; initialState?: ResumeInitialState }) {
   const [client] = useState(() => tabClient('mobile'));
   return (
     <div className="mobile-full">
-      <CheckoutPane sessionId={sessionId} client={client} />
+      <CheckoutPane sessionId={sessionId} client={client} initialState={initialState} />
     </div>
   );
 }

@@ -63,7 +63,13 @@ export function createApp(
     return respond(c, checkout.create(body.listingId, clientFromHeaders(c)));
   });
 
-  app.get('/api/sessions/:id', async (c) => respond(c, await checkout.get(c.req.param('id'), clientFromHeaders(c))));
+  app.get('/api/sessions/:id', async (c) => {
+    const client: ClientContext = {
+      ...clientFromHeaders(c),
+      ...(c.req.header('X-Prefetch') === '1' && { prefetch: true as const }),
+    };
+    return respond(c, await checkout.get(c.req.param('id'), client));
+  });
 
   /**
    * Server-sent events: the current (re-evaluated) session first, then every change to it,

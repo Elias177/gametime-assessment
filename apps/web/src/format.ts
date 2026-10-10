@@ -1,16 +1,4 @@
-/** Integer cents to a display price. */
-export function formatPrice(cents: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
-}
-
-/** Event start in the venue's own time zone when known, so every viewer sees the same wall-clock time. */
-export function formatEventDate(iso: string, timeZone?: string): string {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'full',
-    timeStyle: 'short',
-    ...(timeZone && { timeZone }),
-  }).format(new Date(iso));
-}
+export { formatEventDate, formatPrice } from '@checkout/shared';
 
 /** Milliseconds to m:ss (or h:mm:ss). */
 export function formatCountdown(ms: number): string {

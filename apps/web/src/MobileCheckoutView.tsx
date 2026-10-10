@@ -28,7 +28,7 @@ const RECOVERY_STATUSES: ReadonlyArray<CheckoutSession['status']> = [
 
 /** Phone layout of the checkout: same states as the desktop view, recoveries in a sheet, Pay pinned at the bottom. */
 export function MobileCheckoutView(props: MobileCheckoutViewProps) {
-  const { session, listing, error, paidHere, connection, busy, startedHere } = props;
+  const { session, listing, error, paidHere, connection, busy, startedHere, confirmingPrice = false } = props;
   const { status } = session;
   const remainingMs = useCountdown(session.holdExpiresAt);
   const showCountdown = status === 'active' || status === 'price_changed' || status === 'payment_failed';
@@ -47,7 +47,7 @@ export function MobileCheckoutView(props: MobileCheckoutViewProps) {
       <div className="mobile-body">
         <h1>{listing?.eventName ?? 'Your tickets'}</h1>
         {listing ? <ListingSummary listing={listing} /> : <p className="muted">Loading event details…</p>}
-        <PriceBlock session={session} />
+        <PriceBlock session={session} confirming={confirmingPrice} />
 
         {showCountdown && (
           <p className="muted" data-testid="countdown">
@@ -71,10 +71,12 @@ export function MobileCheckoutView(props: MobileCheckoutViewProps) {
             type="button"
             className="primary"
             data-testid="pay"
-            disabled={status !== 'active' || busy}
+            disabled={status !== 'active' || busy || confirmingPrice}
             onClick={props.onPay}
           >
-            {status === 'payment_pending' ? 'Pay' : `Pay ${formatPrice(status === 'price_changed' ? session.currentPrice : session.priceSnapshot)}`}
+            {status === 'payment_pending' || confirmingPrice
+              ? 'Pay'
+              : `Pay ${formatPrice(status === 'price_changed' ? session.currentPrice : session.priceSnapshot)}`}
           </button>
         </div>
       )}

@@ -79,6 +79,31 @@ describe('header', () => {
   });
 });
 
+describe('confirming the price (pre-rendered page)', () => {
+  it('labels the price and locks Pay until the server has confirmed it', () => {
+    renderView(makeSession(), { confirmingPrice: true });
+
+    expect(screen.getByTestId('confirming-price').textContent).toBe('Confirming price…');
+    expect(screen.getByTestId('price').textContent).toBe('$100.00'); // the last-seen number, labelled
+    const pay = screen.getByTestId('pay') as HTMLButtonElement;
+    expect(pay.disabled).toBe(true);
+    expect(pay.textContent).toBe('Pay'); // no amount that looks final
+  });
+
+  it('shows no label and an enabled Pay once confirmed', () => {
+    renderView(makeSession(), { confirmingPrice: false });
+
+    expect(screen.queryByTestId('confirming-price')).toBeNull();
+    expect((screen.getByTestId('pay') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByTestId('pay').textContent).toBe('Pay $100.00');
+  });
+
+  it('is not shown by default', () => {
+    renderView(makeSession());
+    expect(screen.queryByTestId('confirming-price')).toBeNull();
+  });
+});
+
 describe('sticky Pay button', () => {
   it('is in a bottom bar and calls onPay when the session is active', () => {
     const { onPay } = renderView(makeSession());

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import type { CheckoutSession, Listing } from '@checkout/shared';
+import type { CheckoutSession, Listing, ResumeInitialState } from '@checkout/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 
@@ -39,11 +39,19 @@ class FakeEventSource {
 }
 
 let requests: Array<{ path: string; clientId?: string; surface?: string }> = [];
+/** Hold the live GET /api/sessions/:id, to look at the page before the server has answered. */
+let sessionGate: Promise<void> | undefined;
+let sessionOverrides: Partial<CheckoutSession> = {};
 
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
-function open(path: string, originClientId = session.originClientId, devTools = false) {
+function open(
+  path: string,
+  originClientId = session.originClientId,
+  devTools = false,
+  initialState?: ResumeInitialState,
+) {
   window.history.pushState({}, '', path);
   vi.stubGlobal(
     'fetch',
@@ -55,14 +63,18 @@ function open(path: string, originClientId = session.originClientId, devTools = 
           ? json({ enabled: true, paymentBehavior: 'succeed', clockOffsetMs: 0 })
           : new Response('{}', { status: 404 });
       }
-      return url.startsWith('/api/listings/') ? json(listing) : json({ ...session, originClientId });
+      if (url.startsWith('/api/listings/')) return json(listing);
+      await sessionGate;
+      return json({ ...session, originClientId, ...sessionOverrides });
     }),
   );
-  return render(<App />);
+  return render(<App initialState={initialState} />);
 }
 
 beforeEach(() => {
   requests = [];
+  sessionGate = undefined;
+  sessionOverrides = {};
   FakeEventSource.urls = [];
   sessionStorage.clear();
   vi.stubGlobal('EventSource', FakeEventSource);
@@ -140,6 +152,73 @@ describe('chaos panel placement', () => {
 
     expect(screen.queryByTestId('chaos-panel')).toBeNull();
     expect(requests.some((r) => r.path.startsWith('/api/dev/'))).toBe(false);
+  });
+});
+
+describe('/resume/:id starting from a pre-rendered page', () => {
+  const prerendered: ResumeInitialState = { session, listing };
+
+  it('shows the real mobile view at once, with the price labelled, and no loading state', async () => {
+    let release!: () => void;
+    sessionGate = new Promise<void>((resolve) => (release = resolve));
+    open('/resume/s1', session.originClientId, false, prerendered);
+
+    // Synchronously after the first render: nothing waits for the network.
+    expect(screen.queryByText('Loading your checkout…')).toBeNull();
+    expect(screen.getByTestId('origin-label').textContent).toBe('Opened from link');
+    expect(screen.getByRole('heading', { name: 'The Midnight Orchestra' })).toBeTruthy();
+    expect(screen.getByTestId('price').textContent).toBe('$100.00');
+    expect(screen.getByTestId('confirming-price').textContent).toBe('Confirming price…');
+    expect((screen.getByTestId('pay') as HTMLButtonElement).disabled).toBe(true);
+
+    release();
+    await waitFor(() => expect(screen.queryByTestId('confirming-price')).toBeNull());
+    expect((screen.getByTestId('pay') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('does not fetch the listing, but does fetch the session and open the stream', async () => {
+    open('/resume/s1', session.originClientId, false, prerendered);
+
+    await waitFor(() => expect(FakeEventSource.urls).toHaveLength(1));
+    expect(requests.filter((r) => r.path === '/api/sessions/s1')).toHaveLength(1);
+    expect(requests.some((r) => r.path.startsWith('/api/listings/'))).toBe(false);
+  });
+
+  it('hands over to the normal UI when the live session differs', async () => {
+    let release!: () => void;
+    sessionGate = new Promise<void>((resolve) => (release = resolve));
+    sessionOverrides = { status: 'price_changed', currentPrice: 11200, version: 2 };
+    open('/resume/s1', session.originClientId, false, prerendered);
+    expect(screen.queryByRole('dialog')).toBeNull(); // the pre-rendered state was just "active"
+
+    release();
+
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByTestId('price-banner').textContent).toContain('from $100.00 to $112.00');
+    expect(screen.queryByTestId('confirming-price')).toBeNull();
+  });
+
+  it('shows the dead end when the live session has since expired', async () => {
+    sessionOverrides = { status: 'expired', version: 2 };
+    open('/resume/s1', session.originClientId, false, prerendered);
+
+    expect((await screen.findByTestId('expired')).textContent).toContain('Your hold ran out');
+    expect(screen.queryByTestId('confirming-price')).toBeNull();
+  });
+
+  it('is only for /resume: the split demo ignores it and loads normally', async () => {
+    sessionGate = new Promise(() => undefined);
+    open('/checkout/s1', session.originClientId, false, prerendered);
+
+    expect((await screen.findAllByText('Loading your checkout…')).length).toBe(2); // both panes, as before
+    expect(screen.queryByTestId('confirming-price')).toBeNull();
+  });
+
+  it('ignores a pre-rendered state for another session', async () => {
+    sessionGate = new Promise(() => undefined);
+    open('/resume/s1', session.originClientId, false, { session: { ...session, id: 'other' }, listing });
+
+    expect(await screen.findByText('Loading your checkout…')).toBeTruthy();
   });
 });
 

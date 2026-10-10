@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isTerminalStatus } from '@checkout/shared';
-import type { CheckoutSession, Listing } from '@checkout/shared';
+import type { CheckoutSession, Listing, ResumeInitialState } from '@checkout/shared';
 import { acknowledgeSession, completeSession, eventsUrl, getListing, getSession } from './api';
 import type { ApiError, ApiResult, ClientInfo } from './api';
 
@@ -13,6 +13,12 @@ export interface UseCheckoutSessionOptions {
   newKey?: () => string;
   /** Polling interval used when the SSE stream is unavailable. */
   pollMs?: number;
+  /**
+   * State the page was pre-rendered with. The hook starts from it (no loading state, no listing
+   * fetch) but is "unconfirmed" until the first live response, and still fetches and streams as
+   * usual. Only read on mount; it seeds the session with the matching `id`.
+   */
+  initialState?: ResumeInitialState;
 }
 
 const NETWORK_ERROR: ApiError = { code: 'NETWORK_ERROR', message: 'could not reach the server' };
@@ -23,14 +29,20 @@ const NETWORK_ERROR: ApiError = { code: 'NETWORK_ERROR', message: 'could not rea
  * the window regains focus.
  */
 export function useCheckoutSession(id: string, options: UseCheckoutSessionOptions) {
-  const [session, setSession] = useState<CheckoutSession>();
-  const [listing, setListing] = useState<Listing>();
-  const [loading, setLoading] = useState(true);
+  // Seed only from a pre-rendered state that is for this very session.
+  const seed = options.initialState?.session.id === id ? options.initialState : undefined;
+  const [session, setSession] = useState<CheckoutSession | undefined>(seed?.session);
+  const [listing, setListing] = useState<Listing | undefined>(seed?.listing);
+  const [loading, setLoading] = useState(!seed);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [connection, setConnection] = useState<Connection>('connecting');
+  /** False while all we have is the pre-rendered state: its price may be out of date. */
+  const [confirmed, setConfirmed] = useState(!seed);
 
-  const sessionRef = useRef<CheckoutSession>();
+  const sessionRef = useRef<CheckoutSession | undefined>(seed?.session);
+  const listingRef = useRef<Listing | undefined>(seed?.listing);
+  const confirmedRef = useRef(!seed);
   const idRef = useRef(id);
   /** The idempotency key of the payment attempt in progress, if one has started. */
   const attemptKeyRef = useRef<string>();
@@ -44,7 +56,11 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
    */
   const applySession = useCallback((next: CheckoutSession) => {
     const current = sessionRef.current;
-    if (current && next.version < current.version) return;
+    // The first live answer always wins over the pre-rendered one, even if it looks older.
+    const wasConfirmed = confirmedRef.current;
+    confirmedRef.current = true;
+    setConfirmed(true);
+    if (current && next.version < current.version && wasConfirmed) return;
     if (current && next.version > current.version) setError(null);
     sessionRef.current = next;
     setSession(next);
@@ -55,7 +71,16 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
       const res = await getSession(id, optionsRef.current.client);
       if (idRef.current !== id) return;
       if (res.ok) applySession(res.body);
-      else if (!sessionRef.current) setError(res.body?.error ?? NETWORK_ERROR);
+      else {
+        const failure = res.body?.error ?? NETWORK_ERROR;
+        if (!sessionRef.current) setError(failure);
+        else if (!confirmedRef.current && failure.code === 'SESSION_NOT_FOUND') {
+          // The pre-rendered session is gone (server restarted, or reset): don't keep showing it.
+          sessionRef.current = undefined;
+          setSession(undefined);
+          setError(failure);
+        }
+      }
     } catch {
       // Keep showing what we have; the stream/poll/focus refetch will try again.
       if (idRef.current === id && !sessionRef.current) setError(NETWORK_ERROR);
@@ -65,13 +90,20 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
   // First fetch (and reset when the id changes).
   useEffect(() => {
     idRef.current = id;
-    sessionRef.current = undefined;
     attemptKeyRef.current = undefined;
-    setSession(undefined);
-    setListing(undefined);
+    // Still holding the pre-rendered session for this id (this effect also re-runs in StrictMode):
+    // keep it and just go and confirm it. Otherwise this is a different session: start clean.
+    if (sessionRef.current?.id !== id) {
+      sessionRef.current = undefined;
+      listingRef.current = undefined;
+      confirmedRef.current = true;
+      setSession(undefined);
+      setListing(undefined);
+      setConfirmed(true);
+      setLoading(true);
+    }
     setError(null);
     setLoaded(false);
-    setLoading(true);
     setConnection('connecting');
 
     let cancelled = false;
@@ -88,11 +120,13 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
   // The listing never changes for a session, so fetch it once the session names it.
   const listingId = session?.listingId;
   useEffect(() => {
-    if (!listingId) return;
+    if (!listingId || listingRef.current?.id === listingId) return; // already have it (pre-rendered)
     let cancelled = false;
     getListing(listingId, optionsRef.current.client)
       .then((res) => {
-        if (!cancelled && res.ok) setListing(res.body);
+        if (cancelled || !res.ok) return;
+        listingRef.current = res.body;
+        setListing(res.body);
       })
       .catch(() => undefined);
     return () => {
@@ -199,5 +233,5 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
     attemptKeyRef.current !== undefined &&
     session.idempotencyKey === attemptKeyRef.current;
 
-  return { session, listing, loading, error, connection, paidHere, acknowledge, complete };
+  return { session, listing, loading, error, connection, paidHere, confirmed, acknowledge, complete };
 }

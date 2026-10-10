@@ -353,3 +353,42 @@ Log of what was asked and the results, one entry per task.
 - Open sessions in a pending payment ignore Expire hold (the hold is pinned), by design.
 
 **Next:** Waiting for the next task.
+
+
+## Task 14: Pre-rendered summary for /resume/:sessionId
+
+**Asked:** Let a fan opening the resume link on a phone see their checkout before JavaScript loads. A Vite plugin (middleware fetches the session and listing with `X-Prefetch: 1` and no client headers, 500ms budget; `transformIndexHtml` injects an inline-styled summary matching the mobile view plus an escaped `#initial-state` JSON script; no injection for a missing/terminal session, a failure or a timeout). The HTML builder is a pure shared function (production path not wired, one comment on how it would plug in). Server accepts `X-Prefetch: 1` on `GET /api/sessions/:id` as `prefetch: true` in `ClientContext`. Web: `useCheckoutSession` takes `initialState`; the price reads "Confirming price…" until the first live response; `main.tsx` reads and removes the script and mounts with `createRoot`; only `/resume` uses it. A README-style comment on why this beats a blank SPA shell and what full SSR would add. Tests for the builder, the hook, Playwright with JS off and on, and `prefetch: true` in `onRequest`.
+
+**Shared** (`packages/shared/src`):
+- `prerender.ts` (pure, no I/O): `ResumeInitialState`, `canPrerender` (not terminal), `escapeHtml`, `serializeInitialState` (escapes every `<`, and U+2028/2029, so a value can never write `</script>`), `renderResumeSummary` (inline-styled: event, venue, date in the listing's zone, section/row/seats, last-seen price with "Confirming price…", "Hold expires at <time zone>"), and `injectResumeSummary(html, state)`, which fills the empty `#root`, adds the `initial-state` script and a small base `<style>` in `<head>`, and returns the page untouched for a finished session or when there is no empty `#root`. It uses replacer functions, so `$&` in data stays literal. The comment on how the Hono server would reuse it (read `dist/index.html`, look the session up in-process, call `injectResumeSummary`) is in this file; nothing is wired.
+- `format.ts`: `formatPrice`, `formatEventDate`, `formatSeats`, `formatClockTime` moved here from the web app (which re-exports them) so the summary and the live view cannot word things differently. `formatEventDate` with no time zone used to use the runtime's own zone, which differs between a server and a browser; it is now UTC and says "UTC". The seeded listing has a zone, so nothing visible changes for it.
+
+**Vite plugin** (`apps/web/prerender-plugin.ts`, used by `vite.config.ts`; dev server only, `apply: 'serve'`):
+- A middleware for `GET /resume/:id` with `Accept: text/html` fetches the session, then the listing, under one 500ms deadline (`AbortSignal.timeout`), sending only `X-Prefetch: 1`. If the listing alone fails the session is still pre-rendered, without event details. Anything else (missing, non-JSON, error, timeout) serves the normal page.
+- `transformIndexHtml` cannot see the request, so the state travels in an `AsyncLocalStorage` scoped to the request; concurrent requests cannot see each other's session (tested).
+- The README note (why this beats a blank shell, what full SSR adds and costs) is a comment at the top of this file; there is no README in the repo yet.
+- The plugin imports the shared builder by a relative path: Vite leaves a bare `@checkout/shared` import external when it loads the config, and Node cannot load that package's TypeScript source.
+
+**Server:** `ClientContext` gains `prefetch?: true`; `GET /api/sessions/:id` sets it when `X-Prefetch` is exactly `1`. It is not accepted on any other route (acknowledge, complete and the stream ignore it). It does not change what the read does (it still re-evaluates the session).
+
+**Web:**
+- `useCheckoutSession(id, {initialState})`: seeded only when the state's session id matches `id`. No loading state, no listing fetch (unless the state has no listing), but the live fetch and then SSE run as normal. `confirmed` is false until the first live response, from a fetch or the stream. That response always replaces the seeded session, even with an older version (a server restart); after it, stale updates are ignored again as before. If the live fetch says `SESSION_NOT_FOUND` the seeded session is dropped and the not-found screen shows. Another failure leaves it unconfirmed and the page keeps retrying.
+- Views: the price shows "Confirming price…" on the same line as the number (so nothing moves when it goes) and Pay is disabled, labelled just "Pay", until confirmed.
+- `readInitialState` (`initialState.ts`) parses and always removes the script; `main.tsx` passes it to `App`, which gives it to the `/resume` screen only. `createRoot` replaces the summary in the same commit that draws the real view.
+
+**Tests added:** shared 26 (`prerender.test.ts`): escaping, `</script>` and U+2028 can't break out, `$&` stays literal, the listing's time zone (and the UTC fallback), missing listing, price_changed price, no hold line while pending, finished sessions untouched, no root untouched. Server 4: `prefetch: true` reaches `onRequest` and nothing else does; only `1` counts; writes and other routes ignore it; a prefetch read still re-evaluates. Web 55: plugin 22 (header is only `X-Prefetch`, trailing slash/query, 8 non-matching requests do not fetch, missing/terminal/erroring/non-JSON/slow API, shared budget, listing-only failure, concurrent isolation, id encoding), hook 13, `readInitialState` 9, views 5, App 6. e2e now 20 (+9, `e2e/resume-prerender.spec.ts`): with `javaScriptEnabled: false` the page shows the event, venue, venue-time date, seats, `$100.00`, the hold time and "Confirming price…" and no live view; with JS the summary is replaced, `#initial-state` is gone and "Confirming price…" is gone; with the live fetch held, the real view is already up with the price labelled and Pay locked; a price rise before the live answer opens the normal sheet; the content's position matches between the summary and the live view (within 1px, at 390 wide); missing, finished and non-resume pages are not pre-rendered.
+- Mutation checks: with the hook always "confirmed", 4 tests fail; with `<` escaping removed, 2 fail; shifting the summary's padding by 12px fails the alignment e2e test.
+- Manual: `curl` of `/resume/<id>` on the dev server returned the summary and the JSON in 0.1s; an unknown id returned the plain page.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 100, server 96, web 145). `pnpm e2e` passed (20), cold with Playwright starting the server, and no server or process left running afterwards.
+
+**Known gaps / notes:**
+- Dev server only. The built `dist` is static and is not pre-rendered; `vite preview` and a production build do not run this plugin.
+- Vite prints a start-up warning that the config uses features unsupported by `configLoader: 'native'` (extensionless imports). It works today; the warning is about a future default. `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` hides it.
+- The summary's "Hold expires at" is in the venue's zone with its name (e.g. "8:10 PM PDT") because the server cannot know the phone's zone; the live view then shows a countdown instead, so that line's text changes (its box does not).
+- The summary always says "Opened from link"; the live view says "Started on this device" if this tab started the checkout, so that label can change once the app runs. The summary has no connection indicator or Pay button (nothing works without JS).
+- Without JavaScript the price stays "Confirming price…" for good, which is accurate: it was never confirmed.
+- The prefetch is a real read of the session, so it also re-evaluates and can persist an expiry.
+- Process hygiene: leftover `concurrently`/`tsx watch` trees from my own background `pnpm dev` runs kept respawning a server on port 3001 and broke a manual start. They were mine, not Playwright's; I killed them. If a manual `pnpm dev` ever fails with `EADDRINUSE` on 3001, look for stray `tsx watch` processes.
+
+**Next:** Waiting for the next task.

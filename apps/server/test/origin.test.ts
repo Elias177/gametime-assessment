@@ -107,6 +107,61 @@ describe('client context reaches the service', () => {
     expect(seen.at(-1)).toMatchObject({ action: 'get', client: {} });
   });
 
+  it('flags a pre-render prefetch (X-Prefetch: 1, no client headers) with prefetch: true', async () => {
+    const { api, seen } = setupRecording();
+    const created = await startSession(api);
+    const id = created.body.id as string;
+
+    const res = await api.get(`/api/sessions/${id}`).set('X-Prefetch', '1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id, status: 'active' });
+    expect(seen.at(-1)).toEqual({ action: 'get', sessionId: id, client: { prefetch: true } });
+  });
+
+  it('does not flag ordinary reads, and ignores any value other than "1"', async () => {
+    const { api, seen } = setupRecording();
+    const created = await startSession(api);
+    const id = created.body.id as string;
+
+    await asClient(api.get(`/api/sessions/${id}`), 'phone-1', 'mobile');
+    await api.get(`/api/sessions/${id}`).set('X-Prefetch', 'true');
+    await api.get(`/api/sessions/${id}`).set('X-Prefetch', '0');
+
+    expect(seen.filter((s) => s.action === 'get').map((s) => s.client)).toEqual([
+      { clientId: 'phone-1', surface: 'mobile' },
+      {},
+      {},
+    ]);
+  });
+
+  it('accepts X-Prefetch only on the session read, not on writes or the stream', async () => {
+    const { api, seen, createSession } = setupRecording();
+    const { id, version } = await createSession();
+
+    await api.post(`/api/sessions/${id}/acknowledge`).set('X-Prefetch', '1').send({ version });
+    await api
+      .post(`/api/sessions/${id}/complete`)
+      .set('X-Prefetch', '1')
+      .set('Idempotency-Key', 'k1')
+      .send({ version });
+
+    expect(seen.map((s) => [s.action, s.client])).toEqual([
+      ['acknowledge', {}],
+      ['complete', {}],
+    ]);
+  });
+
+  it('a prefetch read re-evaluates the session like any other read', async () => {
+    const { api, clock, createSession } = setupRecording();
+    const { id } = await createSession();
+    clock.advance(11 * 60 * 1000);
+
+    const res = await api.get(`/api/sessions/${id}`).set('X-Prefetch', '1');
+
+    expect(res.body.status).toBe('expired'); // the pre-render sees the truth and so will not inject
+  });
+
   it('reads the client from query params on the SSE URL, since EventSource cannot set headers', async () => {
     const { app, seen, createSession } = setupRecording();
     const { id } = await createSession();
