@@ -1,0 +1,18 @@
+{
+  "name": "checkout-continuity",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter @checkout/server dev\" \"pnpm --filter @checkout/web dev\"",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^22.7.0",
+    "concurrently": "^9.0.1",
+    "typescript": "^5.6.3"
+  }
+}
