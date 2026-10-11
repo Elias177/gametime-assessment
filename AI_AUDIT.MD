@@ -35,7 +35,7 @@ Log of what was asked and the results, one entry per task.
 
 **Next:** Waiting for the next task. Likely candidate: the pure session state machine in `packages/shared`.
 
-## Task 3: Fix WebStorm warnings
+## Task 2b: Fix WebStorm warnings
 
 **Asked:** Fix the WebStorm inspection warnings: unresolved `/src/main.tsx` in `apps/web/index.html`, and vulnerable `vitest@2.1.9` and `vite@5.4.21` (CVE-2026-47429, -84373, -53632, -53571, -39365).
 
@@ -430,5 +430,31 @@ Log of what was asked and the results, one entry per task.
 - `price_change_shown` is keyed on (client, snapshot price, new price). A client that reloads gets a new client id only if it has no tab storage, otherwise it counts as the same client.
 - Events carry no auth: `X-Client-Id` is whatever the caller sends, so an event is as trustworthy as that header (the state change it describes is real, the client attribution is not verified).
 - The web `AnalyticsEventView` type is a loose copy of the server's event shape (the web app can't import the server package).
+
+**Next:** Waiting for the next task.
+
+
+## Task 16: Close the remaining test gaps
+
+**Asked:** (1) a deterministic test that reaches the lost-save guard in `applyPayment`, confirmed by a mutation check; (2) an e2e where two real devices race to pay; (3) an e2e for retry after a failed payment using a new key; (4) rename `e2e/health.spec.ts` to `e2e/checkout.spec.ts`; (5) update the README (new tests listed, "One untested line" bullet removed if the mutation check now fails), nothing else.
+
+**Server test** (`apps/server/test/settlement-race.test.ts`, 2 tests): builds a `CheckoutService` over wrapped deps. `RecordingStore` records every `save` and whether the compare-and-set accepted it. `BarrierPayment` holds every `lookup` until two callers are inside it. `lookup` is the only async step between reading the `payment_pending` session and `applyPayment`'s save, so both settlers have read version N before either saves (a store `get` is synchronous and can't hold a caller, so the barrier sits there instead). The session is pending, the provider outcome is settled to `succeeded`, then two settlements run together: (a) a GET refresh plus `refreshById` (what dev settle calls), (b) two `refreshById`. Asserts: exactly one accepted save after arming, final status `completed` with one order id, `inventory.confirm` called once, one `completed` analytics event, one charge.
+- **Mutation check:** replaced `if (!store.save(...)) return this.latest(session);` in `applyPayment` with a bare `store.save(...)`. Both new tests fail (`expected "confirm" to be called 1 times, but got 2 times`). The guard is restored (verified with `git diff`: no change under `apps/server/src`). So the "One untested line" bullet is removed from the README.
+
+**E2e** (`e2e/checkout.spec.ts`, +2):
+- *Retry uses a new key:* set behavior to `fail` through `/api/dev/payment-behavior`, Pay, see "card declined"; set `succeed`, Try again, see "Order confirmed". `page.on('request')` captures the `/complete` requests: two, with different non-empty `Idempotency-Key` headers. `/api/dev/events` has one `payment_failed` and one `completed` for the session.
+- *Two devices race to pay:* five iterations in one test, each resetting the server, creating a session through the API, and opening two separate browser contexts on `/resume/:id`. Both Pay buttons are clicked with `Promise.allSettled`. Asserts exactly one `confirmation` across the two pages, the other on "Completed on another device", the loser's `/complete` replies each either 200 `completedElsewhere` or 409 `PAYMENT_IN_PROGRESS`, the same order id on both pages, no `error` banner on either, and exactly one `completed` event for the session.
+- **Finding while writing it:** the first version used `Promise.all` on the two `click()`s and hung in about a third of runs. When the winner's sale reaches the other device through the stream first, that device's Pay button is already gone, so Playwright keeps waiting for it. That is a real ordering (the other half of the race), not an app bug, so the clicks now use a 3s timeout via `allSettled` and the test requires that at least one click landed. Runs that take about 5s instead of about 2s are that ordering. 12 repeats of the test (60 iterations) passed after the change.
+- The test asserts the loser's *reply codes* rather than a transient on-screen message, because the "payment already in progress" text can disappear before Playwright looks. The final state (Completed on another device, no error banner) is asserted on screen.
+- `e2e/health.spec.ts` renamed to `e2e/checkout.spec.ts` with `git mv`; the proxy health check stays in it.
+
+**README:** Testing section lists the settlement race, the two-device double Pay race and the retry-with-a-new-key flow, and names the e2e files. The "One untested line" bullet is removed. Nothing else changed.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 100, server 140, web 158 = 398). `pnpm e2e` passed (24: 22 before, +2), with the server already running from earlier runs (`reuseExistingServer`).
+
+**Known gaps / notes:**
+- The race e2e can't force which device wins or whether both requests reach the server; it covers both orderings by repetition, not by control. The deterministic ordering is covered by the server test.
+- The earlier audit entries still say `e2e/health.spec.ts` (Task 7, line ~275); I left them as history.
+- `refresh()` does a second `save` after `applyPayment` already saved, which always fails and is ignored; harmless, but it means "failed saves" in a settlement are not a useful count, so the test counts accepted saves only.
 
 **Next:** Waiting for the next task.

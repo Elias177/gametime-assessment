@@ -190,6 +190,115 @@ test('Reset demo goes back to the start screen', async ({ page }) => {
   await expect(page.getByTestId('start-screen')).toBeVisible();
 });
 
+test('retry after a failed payment uses a new idempotency key', async ({ page, request }) => {
+  const { desktop } = await startCheckout(page);
+  const keys: string[] = [];
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && req.url().endsWith('/complete')) keys.push(req.headers()['idempotency-key']!);
+  });
+  const sessionId = new URL(page.url()).pathname.split('/').pop()!;
+
+  const fail = await request.post('/api/dev/payment-behavior', { data: { behavior: 'fail' } });
+  expect(fail.ok()).toBe(true);
+  await desktop.getByTestId('pay').click();
+  await expect(desktop.getByTestId('payment-failed')).toContainText('card declined');
+
+  const succeed = await request.post('/api/dev/payment-behavior', { data: { behavior: 'succeed' } });
+  expect(succeed.ok()).toBe(true);
+  await desktop.getByTestId('try-again').click();
+  await expect(desktop.getByTestId('confirmation')).toContainText('Order confirmed');
+
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toBeTruthy();
+  expect(keys[1]).toBeTruthy();
+  expect(keys[0]).not.toBe(keys[1]);
+
+  const { events } = (await (await request.get('/api/dev/events')).json()) as { events: { name: string; sessionId: string }[] };
+  const mine = events.filter((e) => e.sessionId === sessionId);
+  expect(mine.filter((e) => e.name === 'payment_failed')).toHaveLength(1);
+  expect(mine.filter((e) => e.name === 'completed')).toHaveLength(1);
+});
+
+test('two real devices pressing Pay at the same moment: one charge, one order, no error banner', async ({
+  browser,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const baseURL = testInfo.project.use.baseURL;
+
+  for (let run = 1; run <= 5; run++) {
+    const reset = await request.post('/api/dev/reset');
+    expect(reset.status(), `run ${run}: reset`).toBe(204);
+    const created = await request.post('/api/sessions', {
+      data: { listingId: 'demo-listing' },
+      headers: { 'X-Client-Id': `origin-${run}`, 'X-Surface': 'web' },
+    });
+    expect(created.status(), `run ${run}: create`).toBe(201);
+    const sessionId = ((await created.json()) as { id: string }).id;
+
+    const contexts = await Promise.all([browser.newContext({ baseURL }), browser.newContext({ baseURL })]);
+    try {
+      const pages = await Promise.all(contexts.map((c) => c.newPage()));
+      const completeReplies: { status: number; body: { error?: { code: string }; completedElsewhere?: boolean } }[][] = [[], []];
+      pages.forEach((p, i) =>
+        p.on('response', async (res) => {
+          if (res.request().method() !== 'POST' || !res.url().endsWith('/complete')) return;
+          const body = await res.json().catch(() => ({}));
+          completeReplies[i]!.push({ status: res.status(), body });
+        }),
+      );
+
+      await Promise.all(pages.map((p) => p.goto(`/resume/${sessionId}`)));
+      const pay = pages.map((p) => p.getByTestId('pay'));
+      await Promise.all(pay.map((b) => expect(b).toBeEnabled()));
+      await Promise.all(pages.map((p) => expect(p.getByTestId('connection')).toContainText('live')));
+
+      // Both buttons are live; press them together. If the other device's sale reaches this page
+      // first, its Pay button is already gone and the click gives up: that is the other ordering.
+      const clicks = await Promise.allSettled(pay.map((b) => b.click({ timeout: 3000 })));
+      expect(clicks.filter((c) => c.status === 'fulfilled').length, `run ${run}: at least one Pay click landed`).toBeGreaterThan(0);
+
+      // Exactly one device paid.
+      await expect
+        .poll(async () => (await Promise.all(pages.map((p) => p.getByTestId('confirmation').count()))).reduce((a, b) => a + b, 0), {
+          message: `run ${run}: exactly one confirmation`,
+        })
+        .toBe(1);
+      const winner = (await pages[0]!.getByTestId('confirmation').count()) === 1 ? 0 : 1;
+      const loser = 1 - winner;
+
+      // The other one ends on "Completed on another device" once the stream catches up.
+      await expect(pages[loser]!.getByTestId('completed-elsewhere')).toContainText('Completed on another device');
+      await expect(pages[winner]!.getByTestId('confirmation')).toContainText('Order confirmed');
+
+      // What the loser was told along the way: the sale already happened, or a payment is in flight.
+      for (const reply of completeReplies[loser]!) {
+        const ok =
+          (reply.status === 200 && reply.body.completedElsewhere === true) ||
+          (reply.status === 409 && reply.body.error?.code === 'PAYMENT_IN_PROGRESS');
+        expect(ok, `run ${run}: loser reply ${JSON.stringify(reply)}`).toBe(true);
+      }
+
+      // One order, shown identically on both devices.
+      const orderIds = await Promise.all(pages.map((p) => p.getByTestId('order-id').textContent()));
+      expect(orderIds[0]).toBeTruthy();
+      expect(orderIds[0]).toBe(orderIds[1]);
+
+      // Neither device ends on an error banner.
+      await Promise.all(pages.map((p) => expect(p.getByTestId('error')).toHaveCount(0)));
+
+      // One charge: the server recorded exactly one completed event for the session.
+      const { events } = (await (await request.get('/api/dev/events')).json()) as { events: { name: string; sessionId: string }[] };
+      expect(
+        events.filter((e) => e.sessionId === sessionId && e.name === 'completed'),
+        `run ${run}: completed events`,
+      ).toHaveLength(1);
+    } finally {
+      await Promise.all(contexts.map((c) => c.close()));
+    }
+  }
+});
+
 test('API is reachable through the dev proxy', async ({ request }) => {
   const res = await request.get('/api/health');
   expect(res.ok()).toBe(true);
