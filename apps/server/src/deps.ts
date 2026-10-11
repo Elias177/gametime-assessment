@@ -1,4 +1,6 @@
 import type { Listing } from '@checkout/shared';
+import { InMemoryAnalyticsSink } from './analytics';
+import type { AnalyticsSink } from './analytics';
 import { SystemClock } from './clock';
 import type { Clock } from './clock';
 import { InMemoryInventoryService } from './services/inventory';
@@ -22,6 +24,8 @@ export interface AppDeps {
   pricing: PricingService;
   payment: PaymentService;
   listings: ListingCatalog;
+  /** Where server-side analytics events go. */
+  analytics: AnalyticsSink;
   /** How long a session's inventory hold lasts. */
   holdTtlMs: number;
   /** Interval between SSE heartbeat comments. */
@@ -34,6 +38,7 @@ export interface InMemoryDeps extends AppDeps {
   pricing: InMemoryPricingService;
   payment: InMemoryPaymentService;
   listings: InMemoryListingCatalog;
+  analytics: InMemoryAnalyticsSink;
 }
 
 export interface InMemoryDepsOptions {
@@ -64,6 +69,7 @@ export function createInMemoryDeps(options: InMemoryDepsOptions = {}): InMemoryD
     pricing: new InMemoryPricingService(options.prices),
     payment: new InMemoryPaymentService(options.paymentBehavior),
     listings: new InMemoryListingCatalog(options.listings),
+    analytics: new InMemoryAnalyticsSink(),
     holdTtlMs: options.holdTtlMs ?? DEFAULT_HOLD_TTL_MS,
     heartbeatMs: options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
   };

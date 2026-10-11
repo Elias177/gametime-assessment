@@ -78,7 +78,8 @@ export function createApp(
    */
   app.get('/api/sessions/:id/events', async (c) => {
     const id = c.req.param('id');
-    const initial = await checkout.open(id, clientContext(c.req.query('clientId'), c.req.query('surface')));
+    const client = clientContext(c.req.query('clientId'), c.req.query('surface'));
+    const initial = await checkout.open(id, client);
     if (!initial) return c.json({ error: { code: 'SESSION_NOT_FOUND', message: `no session ${id}` } }, 404);
 
     return streamSSE(c, async (stream) => {
@@ -94,6 +95,7 @@ export function createApp(
       const send = (session: CheckoutSession) => {
         if (session.version <= lastVersion) return; // already sent (initial state vs. early change)
         lastVersion = session.version;
+        checkout.noteDelivered(session, client);
         enqueue(() => stream.writeSSE({ event: 'session', id: String(session.version), data: JSON.stringify(session) }));
         if (isTerminalStatus(session.status)) enqueue(async () => finish());
       };

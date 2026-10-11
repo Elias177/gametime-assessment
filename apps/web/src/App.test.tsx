@@ -63,6 +63,10 @@ function open(
           ? json({ enabled: true, paymentBehavior: 'succeed', clockOffsetMs: 0 })
           : new Response('{}', { status: 404 });
       }
+      if (url === '/api/dev/events') {
+        const empty = { sessions: 0, completed: 0, conversionRate: null, medianMinutesToComplete: null };
+        return json({ events: [], metric: { crossDevice: empty, singleDevice: empty } });
+      }
       if (url.startsWith('/api/listings/')) return json(listing);
       await sessionGate;
       return json({ ...session, originClientId, ...sessionOverrides });
@@ -151,6 +155,34 @@ describe('chaos panel placement', () => {
     await screen.findByTestId('origin-label');
 
     expect(screen.queryByTestId('chaos-panel')).toBeNull();
+    expect(requests.some((r) => r.path.startsWith('/api/dev/'))).toBe(false);
+  });
+});
+
+describe('event log placement', () => {
+  it('shows under the chaos panel when the server has dev tools on', async () => {
+    open('/checkout/s1', session.originClientId, true);
+
+    const log = await screen.findByTestId('event-log');
+    const chaos = screen.getByTestId('chaos-panel');
+    expect(chaos.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(requests.some((r) => r.path === '/api/dev/events')).toBe(true);
+  });
+
+  it('is absent, and never asks for events, when the server has dev tools off', async () => {
+    open('/checkout/s1');
+    await screen.findByTestId('phone-pane');
+    await waitFor(() => expect(requests.some((r) => r.path === '/api/dev/status')).toBe(true));
+
+    expect(screen.queryByTestId('event-log')).toBeNull();
+    expect(requests.some((r) => r.path === '/api/dev/events')).toBe(false);
+  });
+
+  it('is not on /resume', async () => {
+    open('/resume/s1', session.originClientId, true);
+    await screen.findByTestId('origin-label');
+
+    expect(screen.queryByTestId('event-log')).toBeNull();
     expect(requests.some((r) => r.path.startsWith('/api/dev/'))).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ResumeInitialState } from '@checkout/shared';
 import { newClientId, tabClient } from './clientId';
 import { ChaosPanel } from './ChaosPanel';
+import { EventLog } from './EventLog';
 import { CheckoutPane } from './CheckoutPane';
 import { usePath } from './navigate';
 import { StartScreen } from './StartScreen';
@@ -52,6 +53,7 @@ function SplitDemo({ sessionId }: { sessionId: string }) {
       </div>
       {/* Only the demo has it (not /resume), and it renders nothing unless the server has dev tools on. */}
       <ChaosPanel sessionId={sessionId} client={desktop} />
+      <EventLog />
     </>
   );
 }

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { conversionByDevice } from './analytics';
 import type { PaymentBehavior } from './services/payment';
 import { providerKey } from './services/payment';
 import { apiError } from './checkout-service';
@@ -36,6 +37,12 @@ export function createDevRouter(
   const dev = new Hono();
   const send = (c: { json: (body: object, status: ApiResult['status']) => Response }, r: ApiResult) =>
     c.json(r.body, r.status);
+
+  // Everything the server has tracked, plus the cross-device metric computed from it.
+  dev.get('/events', (c) => {
+    const events = deps.analytics.list();
+    return c.json({ events, metric: conversionByDevice(events) });
+  });
 
   dev.get('/status', (c) =>
     c.json({ enabled: true, paymentBehavior: deps.payment.getBehavior(), clockOffsetMs: clock.offsetMs }),
@@ -114,6 +121,8 @@ export function createDevRouter(
     deps.pricing.reset();
     deps.payment.reset();
     clock.reset();
+    deps.analytics.clear();
+    checkout.resetTracking();
     return c.body(null, 204);
   });
 

@@ -82,3 +82,34 @@ export const getDevStatus = () => call<DevStatus>('/api/dev/status', undefined);
 /** POST to a dev action, e.g. `devAction('price', {listingId, deltaCents})`. No client headers needed. */
 export const devAction = (action: string, body: object = {}) =>
   call<unknown>(`/api/dev/${action}`, undefined, post(body));
+
+/** One server-side analytics event, as `/api/dev/events` returns it. */
+export interface AnalyticsEventView {
+  name: string;
+  sessionId: string;
+  timestamp: string;
+  source: 'client' | 'system';
+  clientId?: string;
+  surface?: Surface;
+  props: Record<string, unknown>;
+}
+
+export interface DeviceGroupStats {
+  sessions: number;
+  completed: number;
+  conversionRate: number | null;
+  medianMinutesToComplete: number | null;
+}
+
+export interface ConversionMetric {
+  crossDevice: DeviceGroupStats;
+  singleDevice: DeviceGroupStats;
+}
+
+export interface DevEvents {
+  events: AnalyticsEventView[];
+  metric: ConversionMetric;
+}
+
+/** Dev only, like the rest of `/api/dev`. */
+export const getDevEvents = () => call<DevEvents>('/api/dev/events', undefined);

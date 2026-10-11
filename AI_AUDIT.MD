@@ -392,3 +392,43 @@ Log of what was asked and the results, one entry per task.
 - Process hygiene: leftover `concurrently`/`tsx watch` trees from my own background `pnpm dev` runs kept respawning a server on port 3001 and broke a manual start. They were mine, not Playwright's; I killed them. If a manual `pnpm dev` ever fails with `EADDRINUSE` on 3001, look for stray `tsx watch` processes.
 
 **Next:** Waiting for the next task.
+
+
+## Task 15: Server-side analytics and cross-device conversion metric
+
+**Asked:** Track on the server, where state changes, never in the UI, so events can't be faked or double-counted. `AnalyticsSink` (in-memory impl with `list()`/`clear()`, in `AppDeps`); ten events with `source: "client" | "system"`; a failing sink must never break a request; a pure `conversionByDevice(events)` metric; dev `GET /api/dev/events` (and reset clears the sink); a polled event log pane under the chaos panel; tests per event, metric unit tests, a view test and one e2e.
+
+**Server** (`apps/server/src`):
+- `analytics.ts`: `AnalyticsEvent` (a union by `name`, each with typed `props`), `AnalyticsSink`, `InMemoryAnalyticsSink`, `safeTrack` (catches a throw and a rejected promise), and `conversionByDevice`. `AppDeps.analytics` is added to `createInMemoryDeps`.
+- Every event has `name`, `sessionId`, `timestamp` (injected clock), `source`, and `clientId`/`surface` when a client caused it. The cause is the request's `ClientContext`, passed into `refresh()`. A request with no client id, or a prefetch read, counts as `system`. The scheduler and dev actions call `refreshById`/`refreshLive` with no cause, so they are `system`.
+- Events are emitted right after the save that made the change succeeds (a lost compare-and-set emits nothing, so the winner is the only one to count it):
+  - `session_created` in `create`.
+  - `hold_expired {source}` / `inventory_lost {source}` / `price_change_auto_applied {from,to}` in `refresh`.
+  - `price_change_accepted` in `acknowledge`.
+  - `completed {crossDevice, paidOnSurface}` / `payment_failed {reason}` in `applyPayment`, which also covers a pending payment settled by a later read or by dev settle (then `source: system`, but `paidOnSurface` is still the surface of the client that started the payment).
+- `session_resumed {crossDevice, minutesSinceCreate}`: counted in the one place every request already passes through (`request()`, which calls the `onRequest` hook), for `get` and `stream` only, once per client per session, skipping prefetch and requests with no client id. `minutesSinceCreate` is rounded to 0.1.
+- `price_change_shown {from,to}`: once per client, session and from/to pair, when that client is handed a session in `price_changed`: a GET, a stream frame (initial or later; `app.ts` calls `noteDelivered` for every frame), or the session attached to an action reply.
+- `completion_conflict {code}`: `VERSION_CONFLICT`, `PAYMENT_IN_PROGRESS`, or `COMPLETED_ELSEWHERE` from `/complete` only. A replay by the winning key is not a conflict.
+- The service keeps a small per-session record (which clients resumed, whether a non-origin client did, which prices each client saw, who started payment). `completed.crossDevice` reads it. `resetTracking()` clears it on dev reset.
+- `conversionByDevice(events)` returns `{crossDevice, singleDevice}`, each with `sessions`, `completed`, `conversionRate` (null with no sessions), and `medianMinutesToComplete` (null with no completions). A session exists once it has `session_created`, is cross-device once any `session_resumed` has `crossDevice: true`, and its time runs from the create event to the first `completed` event. Event order doesn't matter.
+- `dev.ts`: `GET /api/dev/events` returns `{events, metric}` (404 when dev tools are off, like the rest of `/api/dev`); `/reset` now also clears the sink and the service's record.
+
+**Web** (`apps/web/src`): `EventLog.tsx` (`EventLogView` presentational, `EventLog` container). It asks `/api/dev/status` first and renders nothing (and never requests events) unless dev tools are on, then polls `/api/dev/events` every 2s, keeping the last list if a poll fails. Two metric rows (cross-device, single-device: sessions, "X of Y completed", rate, median) sit above the events, newest first, each with name, surface (or "system") and key props (prices shown as dollars). Mounted under the chaos panel in the split demo only, not on `/resume`.
+
+**Tests added:**
+- Server 34 (`analytics.test.ts`): each event; prefetch and no-client reads skipped; one `session_resumed` per client across GET and stream; `price_change_shown` once per client and price (GET, stream, action reply, a new price shown again); accepted not recorded for a stale or illegal acknowledge; `hold_expired` client vs scheduler vs prefetch; `inventory_lost` client vs system; `completed` crossDevice true/false (including a prefetch-only visit) and `paidOnSurface`; a pending payment settled later; one `completed` for two racing payments; the three conflict codes and no event for a replay; a throwing and a rejecting sink leave every request working; the dev endpoint, its 404 when off, and reset clearing the sink. Server 8 (`conversion.test.ts`) for the metric: empty input, sessions with no completion, the split, order independence, median of odd and even counts, a duplicate `completed`, and events of unseen sessions.
+- Web 19: `EventLog.test.tsx` (16: ordering, system source, price formatting, the empty state, metric rows above the list, polling at 2s, nothing and no events request when dev is off, stops on unmount, keeps the last list when a poll fails) and 3 in `App.test.tsx` (under the chaos panel when on; absent and no events request when off; not on `/resume`).
+- e2e +2 (`e2e/analytics.spec.ts`): start on desktop, pay on the phone pane, and the log shows `session_resumed` with `crossDevice: true` (mobile), `completed` with `paidOnSurface: mobile`, and the cross-device row "1 of 1 completed, rate 100%" with the single-device row at 0 of 0; the log is absent on the resume page.
+- Mutation checks: allowing prefetch to count as a client fails 3 tests; removing the once-per-client guard fails 2. Removing the lost-save guard in `applyPayment` fails nothing: as in Task 5, the version check rejects the second payment first, so only the store's compare-and-set protects that line.
+
+**Typecheck / tests:** `pnpm typecheck` passed. `pnpm test` passed (shared 100, server 138, web 158). `pnpm e2e` passed (22), cold with Playwright starting the server.
+
+**Known gaps / notes:**
+- The desktop pane's own first load is also a `session_resumed` (`crossDevice: false`), because the spec counts the first GET or connect per client. The phone frame in the split demo is a second client from the start, so it counts as a cross-device resume as soon as it loads, before anyone pays on it.
+- `crossDevice` on `completed` only counts clients that did a GET or opened the stream; a client that only called `/acknowledge` or `/complete` does not count as having resumed.
+- The sink and the service's per-session record are in memory and in one process; they are lost on restart and not shared across instances. The record is never pruned except on dev reset.
+- `price_change_shown` is keyed on (client, snapshot price, new price). A client that reloads gets a new client id only if it has no tab storage, otherwise it counts as the same client.
+- Events carry no auth: `X-Client-Id` is whatever the caller sends, so an event is as trustworthy as that header (the state change it describes is real, the client attribution is not verified).
+- The web `AnalyticsEventView` type is a loose copy of the server's event shape (the web app can't import the server package).
+
+**Next:** Waiting for the next task.

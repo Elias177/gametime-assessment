@@ -443,3 +443,55 @@ code {
   font-weight: normal;
   color: var(--muted);
 }
+
+/* Analytics event log (dev tools, demo only). */
+.event-log {
+  max-width: 960px;
+  margin: 0 auto 32px;
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+  background: var(--card);
+  border: 1px dashed var(--warn-line);
+  border-radius: 12px;
+}
+
+.event-log-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.event-metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.event-metric-row strong {
+  min-width: 7.5em;
+}
+
+.event-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  display: grid;
+  font-size: 0.8125rem;
+}
+
+.event-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+
+.event-name {
+  font-weight: 600;
+  min-width: 11em;
+}
