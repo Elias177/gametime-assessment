@@ -4,6 +4,9 @@ import type { ApiError } from './api';
 import { formatSeats } from '@checkout/shared';
 import { formatCountdown, formatEventDate, formatPrice } from './format';
 import { useCountdown } from './useCountdown';
+import { CopyButton } from './CopyButton';
+import { QrCode, isLoopbackUrl } from './QrCode';
+import { FlashOnChange, StatusSwap, panelKeyFor } from './Transitions';
 import type { Connection } from './useCheckoutSession';
 
 export interface CheckoutViewProps {
@@ -42,6 +45,32 @@ export function describeError(error: ApiError): string {
 }
 
 export const humanize = (reason: string) => reason.replace(/_/g, ' ');
+
+/**
+ * The price drop the buyer is now looking at, or null. A decrease is applied silently (the status
+ * stays `active`), so the deal is the latest change when it was auto-applied and the buyer has
+ * not moved on to another status.
+ */
+export function dealFor(session: CheckoutSession): { from: number; to: number } | null {
+  if (session.status !== 'active') return null;
+  const last = session.changes[session.changes.length - 1];
+  if (!last || last.outcome !== 'auto_applied' || last.to !== session.priceSnapshot || last.from <= last.to) return null;
+  return { from: last.from, to: last.to };
+}
+
+/** The "good news" counterpart to the price-increase banner: nothing to accept, the new price is already in effect. */
+export function DealBanner({ session }: { session: CheckoutSession }) {
+  const deal = dealFor(session);
+  if (!deal) return null;
+  return (
+    <div className="banner ok deal" role="status" data-testid="deal-banner">
+      <p>
+        <strong>Price drop!</strong> You save <strong data-testid="deal-savings">{formatPrice(deal.from - deal.to)}</strong>.
+        Now <strong>{formatPrice(deal.to)}</strong>, down from <s>{formatPrice(deal.from)}</s>.
+      </p>
+    </div>
+  );
+}
 
 /**
  * The action error worth showing as an alert, or null. A failed payment is explained by its own
@@ -92,13 +121,17 @@ export function CheckoutView(props: CheckoutViewProps) {
         </div>
       )}
 
+      <DealBanner session={session} />
+
       {alert && (
         <p className="banner error" role="alert" data-testid="error">
           {alert}
         </p>
       )}
 
-      <StatusPanel {...props} />
+      <StatusSwap panelKey={panelKeyFor(status)}>
+        <StatusPanel {...props} />
+      </StatusSwap>
 
       {!finished && <PhoneLink url={props.resumeUrl} />}
     </section>
@@ -177,20 +210,34 @@ function StatusPanel({ session, error, paidHere, busy, confirmingPrice, onPay, o
  * is labelled as such (on the same line, so nothing moves when the label goes).
  */
 export function PriceBlock({ session, confirming = false }: { session: CheckoutSession; confirming?: boolean }) {
+  // One wrapper around all layouts, so the flash sees the change from one to the other.
+  const shown = session.status === 'price_changed' ? session.currentPrice : session.priceSnapshot;
+  const deal = dealFor(session);
   return (
     <div className="price" aria-label="Price">
-      {session.status === 'price_changed' ? (
-        <>
-          <s className="price-old" data-testid="price-old">
-            {formatPrice(session.priceSnapshot)}
-          </s>{' '}
-          <strong className="price-new" data-testid="price">
-            {formatPrice(session.currentPrice)}
-          </strong>
-        </>
-      ) : (
-        <strong data-testid="price">{formatPrice(session.priceSnapshot)}</strong>
-      )}
+      <FlashOnChange value={shown}>
+        {session.status === 'price_changed' ? (
+          <>
+            <s className="price-old" data-testid="price-old">
+              {formatPrice(session.priceSnapshot)}
+            </s>{' '}
+            <strong className="price-new" data-testid="price">
+              {formatPrice(session.currentPrice)}
+            </strong>
+          </>
+        ) : deal ? (
+          <>
+            <s className="price-old" data-testid="deal-old-price">
+              {formatPrice(deal.from)}
+            </s>{' '}
+            <strong className="price-deal" data-testid="price">
+              {formatPrice(deal.to)}
+            </strong>
+          </>
+        ) : (
+          <strong data-testid="price">{formatPrice(session.priceSnapshot)}</strong>
+        )}
+      </FlashOnChange>
       {confirming && (
         <>
           {' '}
@@ -211,27 +258,31 @@ export function ProcessingPanel() {
   );
 }
 
-/** The order confirmation when this client paid, or the "someone else paid" notice. */
+/**
+ * The receipt: the order confirmation when this client paid, or the "someone else paid" notice. Both
+ * show the order number (copyable, in a monospace face so it reads unambiguously) and the total.
+ */
 export function CompletedPanel({ session, paidHere }: { session: CheckoutSession; paidHere: boolean }) {
-  return paidHere ? (
-    <div className="banner ok" role="status" data-testid="confirmation">
-      <p>
-        <strong>Order confirmed</strong>
-      </p>
-      <p>
-        Order number: <code data-testid="order-id">{session.orderId}</code>
-      </p>
-    </div>
-  ) : (
-    <div className="banner ok" role="status" data-testid="completed-elsewhere">
-      <p>
-        <strong>Completed on another device</strong>
-      </p>
-      {session.orderId && (
-        <p>
-          Order number: <code data-testid="order-id">{session.orderId}</code>
-        </p>
-      )}
+  return (
+    <div
+      className="receipt"
+      role="status"
+      data-testid={paidHere ? 'confirmation' : 'completed-elsewhere'}
+    >
+      <h2 className="receipt-title">{paidHere ? 'Order confirmed' : 'Completed on another device'}</h2>
+      <dl className="receipt-details">
+        {session.orderId && (
+          <>
+            <dt>Order number</dt>
+            <dd className="receipt-order">
+              <code data-testid="order-id">{session.orderId}</code>
+              <CopyButton text={session.orderId} testId="copy-order" label="Copy" announce="Order number copied" />
+            </dd>
+          </>
+        )}
+        <dt>Total</dt>
+        <dd data-testid="receipt-total">{formatPrice(session.priceSnapshot)}</dd>
+      </dl>
     </div>
   );
 }
@@ -262,31 +313,48 @@ export function ConnectionIndicator({ connection }: { connection: Connection }) 
 
 function PhoneLink({ url }: { url: string }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard can be blocked; the link is selectable in the field.
-    }
-  };
+  // A phone cannot reach this page's own address when it is localhost, so a QR of it would be a dead end.
+  const showQr = !isLoopbackUrl(url);
 
   return (
     <div className="phone">
-      <button type="button" className="link" data-testid="continue-on-phone" onClick={() => setOpen((v) => !v)}>
+      <button
+        type="button"
+        className="link"
+        data-testid="continue-on-phone"
+        aria-expanded={open}
+        aria-controls="phone-reveal"
+        onClick={() => setOpen((v) => !v)}
+      >
         Continue on phone
       </button>
-      {open && (
-        <div className="phone-link" data-testid="phone-link">
-          <input readOnly value={url} aria-label="Link to continue on your phone" onFocus={(e) => e.currentTarget.select()} />
-          <button type="button" data-testid="copy-link" onClick={() => void copy()}>
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
+      {/* Always mounted so it can animate in and out; inert (not focusable, hidden from assistive tech) while closed. */}
+      <div
+        id="phone-reveal"
+        className="phone-reveal"
+        data-testid="phone-link"
+        data-open={open}
+        aria-hidden={!open}
+        {...(open ? {} : { inert: '' })}
+      >
+        <div className="phone-reveal-inner">
+          <div className="phone-open">
+            {showQr && <QrCode text={url} label="QR code: scan with your phone to continue this checkout" />}
+            <div className="phone-share">
+              <p className="muted">{showQr ? 'Scan with your phone, or copy the link.' : 'Copy the link and open it on your phone.'}</p>
+              <div className="phone-link">
+                <input readOnly value={url} aria-label="Link to continue on your phone" onFocus={(e) => e.currentTarget.select()} />
+                <div className="phone-link-actions">
+                  <CopyButton text={url} testId="copy-link" announce="Link copied" />
+                  <a className="button" href={url} target="_blank" rel="noopener noreferrer" data-testid="open-link">
+                    Open in new tab
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

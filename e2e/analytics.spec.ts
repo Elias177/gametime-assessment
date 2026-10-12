@@ -12,6 +12,7 @@ test('start on desktop, open on the phone pane, pay on the phone: cross-device c
   const phone = page.getByTestId('phone-pane');
   await expect(page.getByTestId('desktop-pane').getByTestId('connection')).toContainText('live');
   await expect(phone.getByTestId('connection')).toContainText('live');
+  await page.getByTestId('dev-tab-events').click();
   const log = page.getByTestId('event-log');
 
   await phone.getByTestId('pay').click();

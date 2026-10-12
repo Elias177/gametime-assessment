@@ -11,6 +11,7 @@
   --error-line: #e8a0a0;
   --ok-bg: #e8f6ec;
   --ok-line: #92cfa3;
+  --drawer-w: min(320px, calc(100vw - 48px));
   color-scheme: light;
 }
 
@@ -86,6 +87,10 @@ p {
   font-weight: normal;
 }
 
+.price-deal {
+  color: #1a7f37;
+}
+
 button {
   font: inherit;
   padding: 10px 16px;
@@ -146,6 +151,74 @@ button.link {
   border-color: var(--ok-line);
 }
 
+/* The receipt after a completed order. Same corner radius and green as the other banners. */
+.receipt {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-line);
+  border-radius: 8px;
+}
+
+.receipt-title {
+  margin: 0;
+  font-size: 1.375rem;
+  line-height: 1.25;
+}
+
+/* Label above value, so a 36-character order number and its Copy button get the whole width. */
+.receipt-details {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+
+.receipt-details dt {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.receipt-details dd {
+  margin: 0 0 8px;
+  min-width: 0;
+}
+
+.receipt-details dd:last-child {
+  margin-bottom: 0;
+}
+
+.receipt-order {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.receipt-order code {
+  padding: 2px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  background: var(--card);
+  border: 1px solid var(--ok-line);
+  border-radius: 6px;
+  user-select: all; /* one tap selects the whole number */
+}
+
+.receipt-order button {
+  padding: 4px 12px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .processing {
   display: flex;
   align-items: center;
@@ -201,14 +274,101 @@ button.link {
   border-top: 1px solid var(--line);
   padding-top: 12px;
   display: grid;
-  gap: 8px;
   justify-items: start;
+}
+
+/* The section under "Continue on phone". Its row height animates between 0 and its content, so the card
+   grows and shrinks smoothly, and the action log (which takes whatever height is left) follows it. */
+.phone-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  justify-self: stretch;
+}
+
+.phone-reveal[data-open='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.phone-reveal-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.phone-reveal:not([data-open='true']) .phone-reveal-inner {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .phone-reveal {
+    transition:
+      grid-template-rows 0.3s ease,
+      opacity 0.25s ease;
+  }
+  .phone-reveal-inner {
+    transition: visibility 0s linear 0.3s;
+  }
+  .phone-reveal[data-open='true'] .phone-reveal-inner {
+    transition-delay: 0s;
+  }
+}
+
+/* The QR sits beside the link, not above it, so opening it adds little height (the action log gives that up). */
+.phone-open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  /* The top is the space under the link; the sides and bottom leave room for the focus ring, which the clipping parent would cut off. */
+  padding: 10px 2px 2px;
+}
+
+.phone-share {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.phone-share p {
+  margin: 0;
+}
+
+.qr {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
 }
 
 .phone-link {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   width: 100%;
+}
+
+.phone-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+a.button {
+  font: inherit;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  text-decoration: none;
+}
+
+a.button:focus-visible {
+  outline: 3px solid #9db6ff;
+  outline-offset: 2px;
 }
 
 .phone-link input {
@@ -235,17 +395,147 @@ code {
   padding: 32px 16px;
 }
 
-.demo-desktop {
+.demo-col {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Left side of the demo: the action log, then the desktop pane under it. */
+.demo-col-left {
   flex: 1 1 420px;
   max-width: 560px;
   min-width: 0;
+  display: grid;
+  gap: 24px;
+  /* As tall as the phone column beside it: the desktop pane keeps its own height, the log takes the rest. */
+  align-self: stretch;
+  grid-template-rows: 1fr auto;
+}
+
+.demo-col-left > .demo-col {
+  grid-template-rows: 1fr auto;
+}
+
+.demo-col-left > .demo-col-desktop {
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+
+.action-log {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 16px;
+  /* No size of its own, so the desktop pane decides the row height and the log fills it. */
+  contain: size;
+  min-height: 160px; /* when the columns wrap there is no phone beside it to give it a height */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.action-log ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.825rem;
+}
+
+.action-log li {
+  display: flex;
+  gap: 8px;
+}
+
+/* Like a chat: with few entries they sit at the bottom, and with many the list scrolls. */
+.action-log li:first-child {
+  margin-top: auto;
+}
+
+/* A question at the end of the log: under the entries' text column, with the buttons that answer it. */
+.action-log-prompt {
+  margin-top: 4px;
+}
+
+.action-log-prompt-body {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.action-log-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action-log-buttons button {
+  padding: 6px 12px;
+}
+
+.action-log-n {
+  min-width: 2.5ch;
+  color: var(--muted, #5b6472);
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-col-desktop {
+  width: 100%;
+}
+
+.demo-col-phone {
+  flex: 0 0 auto;
+  width: 390px;
+  max-width: 100%;
+}
+
+.demo-desktop {
+  position: relative;
+  border-radius: 12px;
+}
+
+/* Which device a pane is, and, for a moment, that it was just updated from outside. */
+.pane-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 0.875rem;
+}
+
+.synced {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* A ring that fades around the pane that was just updated. Opacity only, so it is safe with reduced motion. */
+.handoff-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 11; /* above the phone's recovery sheet (10), which is inside the same frame */
+  border: 2px solid var(--accent);
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation: handoff-ring 1.4s ease-out;
+}
+
+@keyframes handoff-ring {
+  from {
+    opacity: 1;
+  }
 }
 
 .phone-frame {
   position: relative;
-  flex: 0 0 auto;
-  width: 390px;
-  max-width: 100%;
+  width: 100%;
   height: 780px;
   border: 10px solid #1c2330;
   border-radius: 40px;
@@ -381,6 +671,51 @@ code {
   }
 }
 
+/* The part of the checkout that changes with the status. It adds no space when empty (phone, active). */
+.status-swap {
+  display: grid;
+  gap: 16px;
+}
+
+.status-swap:empty {
+  display: none;
+}
+
+/* State changes. Opacity only; they play on a change, never on load, and not with reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .swap-in {
+    animation: swap-in 0.28s ease-out;
+  }
+
+  /* A wash of the accent over the price that fades out (an overlay, so only opacity animates). */
+  .flash-on-change {
+    position: relative;
+  }
+
+  .flash::after {
+    content: '';
+    position: absolute;
+    inset: -2px -6px;
+    border-radius: 6px;
+    background: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    animation: flash 1s ease-out;
+  }
+}
+
+@keyframes swap-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes flash {
+  from {
+    opacity: 0.22;
+  }
+}
+
 /* The simulated phone's content must not inherit the desktop card chrome. */
 .phone-frame .pane,
 .mobile-full .pane {
@@ -388,29 +723,196 @@ code {
   border-radius: 0;
 }
 
-/* Chaos panel (dev tools, demo only). */
-.chaos {
-  max-width: 960px;
-  margin: 0 auto 32px;
-  padding: 16px;
-  display: grid;
-  gap: 12px;
+/* Dev drawer (dev tools, demo only): chaos actions, scenarios and the analytics log, over the left edge. */
+.dev-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--drawer-w);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
   background: var(--card);
-  border: 1px dashed var(--warn-line);
-  border-radius: 12px;
+  border-right: 1px solid var(--line);
+  transform: translateX(-100%);
 }
 
-.chaos-header {
+/* The shadow only while open: closed, it would leak a grey strip in from the off-screen drawer. */
+.dev-drawer[data-open='true'] {
+  transform: none;
+  box-shadow: 8px 0 32px rgba(28, 35, 48, 0.14);
+}
+
+.dev-drawer[hidden] {
+  display: none;
+}
+
+/* Narrow screens: the drawer overlays the page, so a click outside it closes it. */
+.dev-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  background: rgba(28, 35, 48, 0.4);
+}
+
+.dev-drawer-scrim[data-open='false'],
+.dev-drawer-scrim[hidden] {
+  display: none;
+}
+
+/* Wide enough for both panes beside it: make room for the drawer so the phone is never under it. The
+   two panes need about 842px, plus the demo's 16px side padding, the drawer (320px) and a 16px gap:
+   about 1210px. Narrower than that, the drawer overlays the page (keep in step with WIDE in DevDrawer.tsx). */
+@media (min-width: 1240px) {
+  body:has(.dev-drawer[data-open='true']) .demo {
+    padding-left: calc(var(--drawer-w) + 16px);
+  }
+
+
+  .dev-drawer-scrim {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dev-drawer {
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+/* Narrow screens: a top bar with the menu button that opens the drawer. It stays pinned while the page
+   scrolls, under the scrim and drawer (z-index 19 and 20) so those still cover it. */
+.dev-bar {
+  position: sticky;
+  top: 0;
+  z-index: 18;
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
+  min-height: calc(60px + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) 16px 0;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  /* Tinted to the page text colour, not black, and faint: it only separates the bar from content scrolling under it. */
+  box-shadow: 0 1px 8px rgba(28, 35, 48, 0.06);
+}
+
+.dev-bar[hidden] {
+  display: none;
+}
+
+.dev-bar-title {
+  min-width: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A 44px square touch target, same 8px radius as every other button. */
+.dev-bar-menu {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  margin-left: -6px;
+}
+
+/* Three bars drawn with one line and two shadows, so the project needs no icon library for it. */
+.menu-icon {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: currentColor;
+  box-shadow:
+    0 -6px 0 currentColor,
+    0 6px 0 currentColor;
+}
+
+.dev-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 8px 0 16px;
+}
+
+.dev-drawer-header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.dev-drawer-status {
+  margin: 4px 0 0;
+  font-size: 1rem;
+  color: var(--muted);
+}
+
+.dev-drawer-close {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 4px 10px;
+}
+
+.dev-drawer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* Closed: nothing inside can be tabbed to or clicked. */
+.dev-drawer[data-open='false'] .dev-drawer-body {
+  visibility: hidden;
+}
+
+.dev-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.dev-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  padding: 8px 12px;
+}
+
+.dev-tabs button[aria-selected='true'] {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.dev-drawer-body > [role='tabpanel']:not([hidden]) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.chaos {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
 }
 
 .chaos-body {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 12px;
 }
 
@@ -425,6 +927,51 @@ code {
   min-width: 0;
 }
 
+/* Settle pending: only offered while a payment is pending. The row height animates between 0 and its
+   content, so the groups below it slide rather than jump. */
+.chaos-settle {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-top: -12px; /* cancels the grid gap while collapsed */
+}
+
+.chaos-settle[data-open='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  margin-top: 0;
+}
+
+.chaos-settle-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Several fieldsets in one collapsing block (Break the session + Next payment). */
+.chaos-group {
+  display: grid;
+  gap: 12px;
+}
+
+.chaos-settle:not([data-open='true']) .chaos-settle-inner {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chaos-settle {
+    transition:
+      grid-template-rows 0.25s ease,
+      opacity 0.2s ease,
+      margin-top 0.25s ease;
+  }
+  .chaos-settle-inner {
+    transition: visibility 0s linear 0.25s;
+  }
+  .chaos-settle[data-open='true'] .chaos-settle-inner {
+    transition-delay: 0s;
+  }
+}
+
 .chaos legend {
   padding: 0 4px;
   font-size: 0.8125rem;
@@ -437,6 +984,114 @@ code {
   color: #fff;
 }
 
+/* What the next payment will do, by colour: green succeeds, red fails, grey stays pending. Used by the
+   status line under the drawer title and by the three behavior buttons. */
+[data-behavior='succeed'] {
+  --tone: #1a7f37;
+}
+
+[data-behavior='fail'] {
+  --tone: #c62828;
+}
+
+[data-behavior='pending'] {
+  --tone: #6b7280;
+}
+
+.dev-drawer-status [data-behavior] {
+  color: var(--tone);
+  font-weight: 600;
+}
+
+.chaos button[data-behavior] {
+  color: var(--tone);
+  border-color: var(--tone);
+}
+
+.chaos button[data-behavior].active {
+  background: var(--tone);
+  border-color: var(--tone);
+  color: #fff;
+}
+
+/* Last in the panel and stuck to the bottom of the drawer, so a result never moves the buttons. */
+.chaos-result {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+}
+
+/* Guided scenarios (dev drawer). */
+.scenarios {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+}
+
+.scenario-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.scenario-list button {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.scenario-title {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.scenario-steps {
+  margin: 0;
+  padding-left: 1.5rem;
+  display: grid;
+  gap: 8px;
+}
+
+/* Done: struck through. To do: muted. Current (or running): bold and full strength. */
+.scenario-steps li[data-state='done'] {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.scenario-steps li[data-state='todo'] {
+  color: var(--muted);
+}
+
+.scenario-steps li[data-state='current'],
+.scenario-steps li[data-state='running'] {
+  font-weight: 600;
+}
+
+.scenario-end {
+  display: grid;
+  gap: 8px;
+}
+
+.scenario-end-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button.danger {
+  background: var(--error-bg);
+  border-color: var(--error-line);
+}
+
+button.success {
+  background: var(--ok-bg);
+  border-color: var(--ok-line);
+}
+
 /* The last-seen price from a pre-rendered page, until the server confirms it. */
 .confirming {
   font-size: 0.875rem;
@@ -444,16 +1099,11 @@ code {
   color: var(--muted);
 }
 
-/* Analytics event log (dev tools, demo only). */
+/* Analytics event log (dev tools, demo only), inside the drawer. */
 .event-log {
-  max-width: 960px;
-  margin: 0 auto 32px;
   padding: 16px;
   display: grid;
   gap: 8px;
-  background: var(--card);
-  border: 1px dashed var(--warn-line);
-  border-radius: 12px;
 }
 
 .event-log-title {
@@ -477,8 +1127,6 @@ code {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 280px;
-  overflow-y: auto;
   display: grid;
   font-size: 0.8125rem;
 }
@@ -493,5 +1141,5 @@ code {
 
 .event-name {
   font-weight: 600;
-  min-width: 11em;
+  min-width: 10em;
 }

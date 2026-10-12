@@ -458,3 +458,135 @@ Log of what was asked and the results, one entry per task.
 - `refresh()` does a second `save` after `applyPayment` already saved, which always fails and is ignored; harmless, but it means "failed saves" in a settlement are not a useful count, so the test counts accepted saves only.
 
 **Next:** Waiting for the next task.
+
+
+## Task 17: Dev drawer
+Chaos panel and event log folded into a collapsible side drawer (Actions / Events tabs, Esc closes, wide screens reserve room for it); web 169, e2e 24.
+
+## Task 18: Pane captions and the "synced" highlight
+Both panes captioned, and a pane updated from outside shows a ring and "Synced just now" (new `onRemoteUpdate` hook option, `PaneColumn`); web 185, e2e 25.
+
+## Task 19: Animate state changes
+Status panels fade in on a status change and the price flashes when it changes, both off under reduced motion (`Transitions.tsx`); web 201, e2e 25.
+
+## Task 20: Receipt for the completed state
+"Order confirmed" is now a receipt with a copyable order number and the total, shared by desktop and phone (`CopyButton.tsx`); web 209, e2e 25.
+
+## Task 21: Guided scenarios in the drawer
+New Scenarios tab with six step-by-step demos (`scenarios.ts`, `ScenariosView.tsx`); chaos state moved into a `useChaos` hook shared by the tabs; web 226, e2e 26.
+
+## Task 22: Scenario steps do the step
+"Run this step" now performs every step, including pressing Pay or Accept on the panes through a `paneControls` registry, and blocks until done (`scenarioRunner.ts`); web 255, e2e 30.
+
+## Task 23: "Continue" label
+Steps that only wait for both panes to show a status read "Continue" instead of "Run this step"; web 257, e2e 30.
+
+## Task 24: A step done by hand updates the scenario
+If the presenter does the current step themselves (chaos button or Pay/Accept on a pane), the scenario marks it done and says so; web 281, e2e 32.
+
+## Task 25: Real-browser pass with the Playwright CLI
+Screenshots at three widths found and fixed six CSS problems (drawer shadow, handle overlap, wrong breakpoint now 1240px / 320px drawer, receipt wrapping, step styling); no logic changes, e2e 32.
+
+## Task 26: "Scenarios" starts a new checkout in place
+Removed Reset demo from scenarios; the "Scenarios" buttons create a new checkout without resetting the page or closing the drawer (`useChaos.newCheckout`, `SplitPanes` keyed by session); web 293, e2e 33.
+
+## Bugfix: sold-out chaos option locked up the demo
+The start screen now offers a Reset button after `SOLD_OUT` when dev tools are on; web 211.
+
+## Bugfix: doing scenario steps by hand stalled "Price goes up, then pay"
+Check ("expect") steps now finish on their own when both panes show the status (`PaneControls.onStatus`); web 295.
+
+## Change: dev drawer open by default
+Drawer starts open without stealing focus; the e2e specs no longer click it open.
+
+## Verification: scenarios done by hand, checked in a real browser
+Checked all six scenarios by hand with playwright-cli; fixed "Two devices pay at once" never finishing by hand (`canPress`) and updated 8 e2e tests; web 296, e2e 33.
+
+## Change: dev drawer restyled as a left side drawer
+Header with close button, scrim on narrow screens, drawer moved to the left edge; web 299.
+
+## Change: dev tools button moved to a top bar
+Replaced the edge launcher with a slim top bar holding a "Dev tools" button; web 299.
+
+## Change: Find other tickets resets the demo
+"Find other tickets" calls `/api/dev/reset` first when dev tools are on (`devToolsOn()` in `api.ts`); web 301.
+
+## Change: drawer always open on wide screens, menu icon on narrow ones
+Wide: permanent drawer titled Gametime "In time" Demo with the next-payment status under it; narrow: top bar with a menu button and modal drawer; web 302.
+
+## Change: Settle pending only while a payment is pending
+The settle buttons animate in and out and are inert when closed (`usePaymentPending`); web 305.
+
+## Change: next-payment status colours
+Green/red/grey for succeed/fail/pending on the status line and behavior buttons, with one status line instead of two; web 306.
+
+## Change: drawer title 18px, status line 16px
+CSS only.
+
+## Change: action log above the desktop pane
+New `ActionLog.tsx` lists what each pane did and every status it moved to; web 309.
+
+## Change: action log sized like the desktop pane, with a caption
+Log gets a matching pane caption and fills the same height; CSS plus markup.
+
+## Change: action log scrolls internally
+Fixed-height log scrolls inside its frame; CSS only.
+
+## Change: log and desktop column as tall as the phone column
+Left column stretches to the phone's height and the log takes the leftover; verified with playwright-cli.
+
+## Change: plainer, numbered action log
+Entries are numbered sentences with no timestamps and no "opened" entry; web 311.
+
+## Change: action log ordered like a chat
+Oldest on top, newest at the bottom, follows new entries unless scrolled up.
+
+## Change: log dev tools actions
+Accepted chaos actions appear as "Dev tools ..." entries via `reportNote`/`onNote`; web 314.
+
+## Change: the log asks for what comes next
+While a payment is pending the log offers Succeed/Fail, and once an order is placed it offers New Checkout (`useChaos` now made in `SplitDemo` and shared); web 318.
+
+## Change: log prompt aligned to the entries' columns
+Prompt text and buttons start in the entries' text column; verified with playwright-cli.
+
+## Change: "Reset demo" renamed "New Checkout"
+Label changed everywhere (UI, README, tests); behavior and test ids unchanged; web 318.
+
+## Change: dev tools locked once the order is placed
+Other Actions-tab buttons were disabled after completion, superseded by the next entry; web 320.
+
+## Change: placed order hides the other dev tools and disables Scenarios
+"Break the session" and "Next payment" collapse (animated) and the Scenarios tab is disabled once an order is placed; web 322.
+
+## Change: action log settle buttons coloured
+Succeed green, Fail red; styling only.
+
+## Change: "Seats sell out" ends with New Checkout
+New `endsWithReset` scenario flag: the end button runs the full reset, since a new session fails once seats are gone; web 324.
+
+## Change: e2e brought in line with the disabled Scenarios tab
+Updated the e2e tests and fixed a real bug where the "slow payment" scenario's last step could never run; unit tests passed, e2e 33.
+
+## Change: price drop shown as a deal
+A silent price drop now shows a "Price drop! You save $X" banner with the old price crossed out (`dealFor`, `DealBanner`); web 327.
+
+## Change: QR code on "Continue on phone"
+Added a QR code (`QrCode.tsx`, `qrcode-generator`) beside the link and Copy button; web 328, e2e 34.
+
+## Change: no QR on localhost, animated phone section and action log
+QR hidden on loopback addresses, the phone section and log animate open and closed, and `randomUuid()` fixes `crypto.randomUUID` failing on plain-http LAN addresses; web 337, e2e 35.
+
+## Change: phone link actions under the input
+Copy moved under the link field and an "Open in new tab" link added; web 337.
+
+## Change: sticky mobile navbar
+The narrow-screen top bar is `position: sticky`; CSS only.
+
+## Change: mobile navbar styling
+Taller bar, 44px menu button, truncating title; CSS only.
+
+## Task 27: README check and audit condensed
+Checked the README against this log and fixed what had drifted (drawer location and title, New Checkout name, action log, QR, deal banner, scenario behavior); condensed Task 17 onward into one-liners. Docs only.
+
+**Latest full runs:** unit tests shared 100, server 140, web 337; e2e 35 (before the last two CSS-only navbar changes, which were not re-run).

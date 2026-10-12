@@ -3,6 +3,7 @@ import { isTerminalStatus } from '@checkout/shared';
 import type { CheckoutSession, Listing, ResumeInitialState } from '@checkout/shared';
 import { acknowledgeSession, completeSession, eventsUrl, getListing, getSession } from './api';
 import type { ApiError, ApiResult, ClientInfo } from './api';
+import { randomUuid } from './clientId';
 
 export type Connection = 'connecting' | 'sse' | 'polling';
 
@@ -19,6 +20,12 @@ export interface UseCheckoutSessionOptions {
    * usual. Only read on mount; it seeds the session with the matching `id`.
    */
   initialState?: ResumeInitialState;
+  /**
+   * Called when a newer session arrives that this pane did not cause: over the stream, a poll or a
+   * refocus fetch, while none of its own actions is in flight. Not for the first load, a
+   * pre-rendered state being confirmed, or the reply to this pane's own action.
+   */
+  onRemoteUpdate?: () => void;
 }
 
 const NETWORK_ERROR: ApiError = { code: 'NETWORK_ERROR', message: 'could not reach the server' };
@@ -46,6 +53,8 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
   const idRef = useRef(id);
   /** The idempotency key of the payment attempt in progress, if one has started. */
   const attemptKeyRef = useRef<string>();
+  /** Own actions in flight; a stream frame that lands meanwhile is probably their echo. */
+  const actionsInFlight = useRef(0);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -54,7 +63,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
    * A strictly newer version also clears the shown error: it described a state that has since
    * moved on (e.g. a VERSION_CONFLICT or PAYMENT_IN_PROGRESS reply).
    */
-  const applySession = useCallback((next: CheckoutSession) => {
+  const applySession = useCallback((next: CheckoutSession, remote = false) => {
     const current = sessionRef.current;
     // The first live answer always wins over the pre-rendered one, even if it looks older.
     const wasConfirmed = confirmedRef.current;
@@ -64,13 +73,16 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
     if (current && next.version > current.version) setError(null);
     sessionRef.current = next;
     setSession(next);
+    if (remote && wasConfirmed && current && next.version > current.version && actionsInFlight.current === 0) {
+      optionsRef.current.onRemoteUpdate?.();
+    }
   }, []);
 
   const fetchSession = useCallback(async () => {
     try {
       const res = await getSession(id, optionsRef.current.client);
       if (idRef.current !== id) return;
-      if (res.ok) applySession(res.body);
+      if (res.ok) applySession(res.body, true);
       else {
         const failure = res.body?.error ?? NETWORK_ERROR;
         if (!sessionRef.current) setError(failure);
@@ -154,7 +166,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
       source = new EventSource(eventsUrl(id, optionsRef.current.client));
       source.addEventListener('session', (event) => {
         setConnection('sse');
-        applySession(JSON.parse((event as MessageEvent<string>).data) as CheckoutSession);
+        applySession(JSON.parse((event as MessageEvent<string>).data) as CheckoutSession, true);
       });
       source.onerror = () => {
         source?.close();
@@ -198,10 +210,13 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
   const acknowledge = useCallback(async () => {
     const current = sessionRef.current;
     if (!current) return;
+    actionsInFlight.current++;
     try {
       settle(await acknowledgeSession(id, current.version, optionsRef.current.client));
     } catch {
       setError(NETWORK_ERROR);
+    } finally {
+      actionsInFlight.current--;
     }
   }, [id, settle]);
 
@@ -214,7 +229,8 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
   const complete = useCallback(async () => {
     const current = sessionRef.current;
     if (!current) return;
-    const key = (attemptKeyRef.current ??= (optionsRef.current.newKey ?? (() => crypto.randomUUID()))());
+    const key = (attemptKeyRef.current ??= (optionsRef.current.newKey ?? (randomUuid))());
+    actionsInFlight.current++;
     try {
       const res = await completeSession(id, key, current.version, optionsRef.current.client);
       if (!res.ok && res.status === 402 && res.body?.error.code === 'PAYMENT_FAILED') {
@@ -223,6 +239,8 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
       settle(res);
     } catch {
       setError(NETWORK_ERROR);
+    } finally {
+      actionsInFlight.current--;
     }
   }, [id, settle]);
 

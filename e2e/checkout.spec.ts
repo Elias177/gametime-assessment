@@ -76,6 +76,109 @@ test('paying on the desktop pane shows "Completed on another device" in the phon
   await expect(desktop.getByTestId('confirmation')).toContainText('Order confirmed');
   await expect(phone.getByTestId('completed-elsewhere')).toContainText('Completed on another device');
   await expect(phone.getByTestId('pay')).toHaveCount(0);
+
+  // Both panes show the same receipt: the order number (copyable) and what was charged.
+  const orderId = (await desktop.getByTestId('order-id').textContent())!;
+  expect(orderId.length).toBeGreaterThan(0);
+  await expect(phone.getByTestId('order-id')).toHaveText(orderId);
+  await expect(desktop.getByTestId('receipt-total')).toHaveText('$100.00');
+  await expect(phone.getByTestId('receipt-total')).toHaveText('$100.00');
+  await expect(desktop.getByTestId('copy-order')).toBeVisible();
+});
+
+test('the pane that did not act is marked "Synced just now"; the one that paid is not', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('start-checkout').click();
+  const desktop = page.getByTestId('desktop-pane');
+  const phone = page.getByTestId('phone-pane');
+  await expect(desktop.getByTestId('connection')).toContainText('live');
+  await expect(phone.getByTestId('connection')).toContainText('live');
+  await expect(page.getByTestId('phone-pane-ring')).toHaveCount(0); // loading both panes is not a sync
+
+  await desktop.getByTestId('pay').click();
+
+  await expect(page.getByTestId('phone-pane-synced')).toHaveText('Synced just now');
+  await expect(phone.getByTestId('phone-pane-ring')).toHaveCount(1);
+  await expect(page.getByTestId('desktop-pane-synced')).toHaveText('');
+  await expect(page.getByTestId('desktop-pane-ring')).toHaveCount(0);
+  await expect(page.getByTestId('phone-pane-synced')).toHaveText('', { timeout: 5000 }); // and it goes away
+});
+
+/** The two left-hand cards (log + desktop) against the phone card, and the log on its own. Heights settle over ~0.3s. */
+async function measure(page: Page) {
+  return page.evaluate(() => {
+    const h = (selector: string) => Math.round(document.querySelector(selector)!.getBoundingClientRect().height);
+    return { left: h('.demo-col-left'), phone: h('.demo-col-phone'), log: h('[data-testid=action-log]') };
+  });
+}
+
+async function settled(page: Page) {
+  // Every transition on the page (the section opening, the log following it) has finished.
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState === 'finished' || a.playState === 'idle'));
+  return measure(page);
+}
+
+test('Continue on phone opens and closes smoothly, and the action log gives up the height so the columns stay level', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('start-checkout').click();
+  const section = page.getByTestId('phone-link');
+  const toggle = page.getByTestId('desktop-pane').getByTestId('continue-on-phone');
+
+  await expect(toggle).toBeVisible();
+  await expect(section).toBeHidden();
+  const closed = await settled(page);
+  expect(closed.left).toBe(closed.phone);
+
+  await toggle.click();
+  // The log does not jump to its final height: partway through it is between the two.
+  await expect.poll(async () => (await measure(page)).log, { intervals: [30] }).toBeLessThan(closed.log);
+  await expect(section).toBeVisible();
+  const open = await settled(page);
+  expect(open.left).toBe(open.phone);
+  expect(open.log).toBeLessThan(closed.log);
+  // On localhost a phone could not open the link, so there is the link to copy and no QR.
+  await expect(page.getByTestId('phone-qr')).toHaveCount(0);
+  await expect(section.getByRole('textbox')).toHaveValue(/localhost:5173\/resume\//);
+
+  await toggle.click();
+  await expect(section).toBeHidden();
+  const back = await settled(page);
+  expect(back).toEqual(closed);
+});
+
+test.describe('on an address a phone can reach', () => {
+  // Serve the app under a made-up public host name by forwarding its requests to the dev server.
+  test.beforeEach(async ({ context }) => {
+    await context.route(/^http:\/\/demo\.example:5173\//, (route) => {
+      const request = route.request();
+      const headers = Object.fromEntries(Object.entries(request.headers()).map(([k, v]) => [k, v.replace('demo.example', 'localhost')]));
+      return route.continue({ url: request.url().replace('demo.example', 'localhost'), headers });
+    });
+  });
+
+  test('Continue on phone shows a QR code of the link, and the columns stay level', async ({ page }) => {
+    await page.goto('http://demo.example:5173/');
+    await page.getByTestId('start-checkout').click();
+    const toggle = page.getByTestId('desktop-pane').getByTestId('continue-on-phone');
+    const qr = page.getByTestId('phone-qr');
+
+    await expect(toggle).toBeVisible();
+    await expect(qr).toBeHidden();
+    const closed = await settled(page);
+
+    await toggle.click();
+    await expect(qr).toBeVisible();
+    const link = await page.getByTestId('phone-link').getByRole('textbox').inputValue();
+    expect(link).toMatch(/^http:\/\/demo\.example:5173\/resume\//);
+    await expect(qr).toHaveAttribute('data-value', link);
+    const open = await settled(page);
+    expect(open.left).toBe(open.phone);
+    expect(open.log).toBeLessThan(closed.log);
+
+    await toggle.click();
+    await expect(qr).toBeHidden();
+    expect(await settled(page)).toEqual(closed);
+  });
 });
 
 test('the resume link opens only the mobile view, as a second device', async ({ page, context }) => {
@@ -169,7 +272,7 @@ test.describe('recovery states, forced with the chaos panel', () => {
   test('a pending payment settles as failed on both panes', async ({ page }) => {
     const { desktop, phone, chaos } = await startCheckout(page);
     await chaos.getByTestId('chaos-behavior-pending').click();
-    await expect(chaos.getByTestId('chaos-behavior')).toHaveText('Next payment: pending');
+    await expect(page.getByTestId('drawer-behavior')).toHaveText('pending');
 
     await desktop.getByTestId('pay').click();
     await expect(desktop.getByTestId('processing')).toBeVisible();
@@ -181,7 +284,171 @@ test.describe('recovery states, forced with the chaos panel', () => {
   });
 });
 
-test('Reset demo goes back to the start screen', async ({ page }) => {
+test.describe('guided scenarios: the only thing the test does is press the step button', () => {
+  /** Open the Scenarios tab, start one, and press Run for each of its steps in turn. */
+  async function runScenario(page: Page, id: string, steps: number, placesOrder = false) {
+    await page.getByTestId('dev-tab-scenarios').click();
+    await page.getByTestId(`scenario-start-${id}`).click();
+    const run = page.getByTestId('scenario-run');
+    for (let i = 0; i < steps; i++) {
+      const step = page.getByTestId(`scenario-step-${i}`);
+      await expect(step).not.toHaveAttribute('data-state', 'todo');
+      // A step that only checks the panes ("Continue") finishes by itself; the others need the button.
+      if ((await step.getAttribute('data-state')) === 'current' && (await run.textContent()) === 'Run this step') {
+        await run.click();
+      }
+      await expect(step).toHaveAttribute('data-state', 'done');
+    }
+    if (placesOrder) {
+      // Once the order is placed there is nothing left to run: the Scenarios tab is off and Actions is shown.
+      await expect(page.getByTestId('dev-tab-scenarios')).toBeDisabled();
+      await expect(page.getByTestId('dev-tab-actions')).toHaveAttribute('aria-selected', 'true');
+    } else {
+      await expect(page.getByTestId('scenario-complete')).toBeVisible();
+    }
+  }
+
+  test('price goes up, the scenario accepts it and pays, and the button is blocked while a step runs', async ({ page }) => {
+    const { desktop, phone } = await startCheckout(page);
+
+    await runScenario(page, 'price-jump', 5, true);
+
+    // The scenario really paid, on the phone, after really accepting on the desktop.
+    await expect(phone.getByTestId('confirmation')).toContainText('Order confirmed');
+    await expect(desktop.getByTestId('completed-elsewhere')).toContainText('Completed on another device');
+    await expect(phone.getByTestId('receipt-total')).toHaveText('$112.00');
+
+    // The Scenarios tab is off now, so the way on is New Checkout in the Actions tab (back to the start screen).
+    await page.getByTestId('chaos-reset').click();
+    await expect(page.getByTestId('start-screen')).toBeVisible();
+    const next = await startCheckout(page);
+
+    // The next scenario runs on the new checkout.
+    await runScenario(page, 'payment-retry', 6, true);
+    await expect(next.desktop.getByTestId('confirmation')).toContainText('Order confirmed');
+  });
+
+  test('the seats sold out: the scenario ends with New Checkout, which resets and gets the seats back', async ({ page }) => {
+    await startCheckout(page);
+
+    await runScenario(page, 'sold-out', 2);
+    await expect(page.getByTestId('scenario-back-end')).toHaveCount(0);
+    await page.getByTestId('scenario-new-checkout').click();
+
+    await expect(page.getByTestId('start-screen')).toBeVisible();
+  });
+
+  test('a declined payment shows on both panes, then the scenario retries and it goes through', async ({ page }) => {
+    const { desktop, phone } = await startCheckout(page);
+
+    await runScenario(page, 'payment-retry', 6, true);
+
+    await expect(desktop.getByTestId('confirmation')).toContainText('Order confirmed');
+    await expect(phone.getByTestId('completed-elsewhere')).toContainText('Completed on another device');
+  });
+
+  test('a slow payment settles, and the scenario puts the payment behavior back', async ({ page, request }) => {
+    const { desktop, phone } = await startCheckout(page);
+
+    await runScenario(page, 'pending-settles', 6, true);
+
+    await expect(desktop.getByTestId('confirmation')).toContainText('Order confirmed');
+    await expect(phone.getByTestId('completed-elsewhere')).toContainText('Completed on another device');
+    const status = await (await request.get('/api/dev/status')).json();
+    expect(status.paymentBehavior).toBe('succeed');
+  });
+
+  test('two panes pay at the same moment: one order, one "completed elsewhere"', async ({ page }) => {
+    const { desktop, phone } = await startCheckout(page);
+
+    await runScenario(page, 'double-pay', 2, true);
+
+    const confirmations =
+      (await desktop.getByTestId('confirmation').count()) + (await phone.getByTestId('confirmation').count());
+    expect(confirmations).toBe(1);
+    const elsewhere =
+      (await desktop.getByTestId('completed-elsewhere').count()) + (await phone.getByTestId('completed-elsewhere').count());
+    expect(elsewhere).toBe(1);
+    await expect(desktop.getByTestId('order-id')).toHaveText((await phone.getByTestId('order-id').textContent())!);
+  });
+
+  test('doing a step yourself marks it done: the price rise from the Actions tab, Accept and Pay on the panes', async ({ page }) => {
+    const { desktop, phone, chaos } = await startCheckout(page);
+    await page.getByTestId('dev-tab-scenarios').click();
+    await page.getByTestId('scenario-start-price-jump').click();
+    const step = (i: number) => page.getByTestId(`scenario-step-${i}`);
+    const current = (i: number) => expect(step(i)).toHaveAttribute('aria-current', 'step');
+
+    // Step 1 (raise the price): do it from the Actions tab instead of pressing Run.
+    await current(0);
+    await page.getByTestId('dev-tab-actions').click();
+    await chaos.getByTestId('chaos-price-up').click();
+    await page.getByTestId('dev-tab-scenarios').click();
+    await expect(page.getByTestId('scenario-note')).toContainText('You did that step yourself');
+
+    // Step 2 only checks the panes, so it finishes by itself once both show the price change.
+    await current(2);
+
+    // Step 3 (accept the price): click the button on the pane itself.
+    await desktop.getByTestId('accept-price').click();
+    await current(3);
+
+    // Step 4 (pay): click Pay on the *other* pane than the one named; the order is the same.
+    await desktop.getByTestId('pay').click();
+    await expect(desktop.getByTestId('confirmation')).toContainText('Order confirmed');
+
+    // Step 5 checks both panes show the order, and finishes by itself: no Continue press anywhere.
+    await expect(step(4)).toHaveAttribute('data-state', 'done');
+    await expect(page.getByTestId('dev-tab-scenarios')).toBeDisabled();
+    await expect(phone.getByTestId('completed-elsewhere')).toContainText('Completed on another device');
+  });
+
+  test('a manual press on a pane does not skip a step the scenario is running itself', async ({ page }) => {
+    const { desktop } = await startCheckout(page);
+    await page.getByTestId('dev-tab-scenarios').click();
+    await page.getByTestId('scenario-start-payment-retry').click();
+    const step = (i: number) => page.getByTestId(`scenario-step-${i}`);
+
+    // Run the first two steps with the button: make payments fail, then pay on the desktop.
+    await page.getByTestId('scenario-run').click();
+    await expect(step(1)).toHaveAttribute('aria-current', 'step');
+    await page.getByTestId('scenario-run').click();
+
+    // The scenario's own press must not be counted twice: the check after it finishes by itself and
+    // the scenario stops at the next step (make the next payment succeed), not past it.
+    await expect(step(3)).toHaveAttribute('aria-current', 'step');
+    await expect(step(4)).toHaveAttribute('data-state', 'todo');
+    await expect(page.getByTestId('scenario-note')).toHaveCount(0);
+    await expect(desktop.getByTestId('payment-failed')).toBeVisible();
+  });
+
+  test('the button is disabled and reads "Running…" while a step waits for the panes', async ({ page }) => {
+    await startCheckout(page);
+    await page.getByTestId('dev-tab-scenarios').click();
+    await page.getByTestId('scenario-start-sold-out').click();
+    const run = page.getByTestId('scenario-run');
+
+    // Hold the sell-out reply, so the step is demonstrably in progress.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route('**/api/dev/sell-out', async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    await run.click();
+    await expect(run).toBeDisabled();
+    await expect(run).toHaveText('Running…');
+    await expect(page.getByTestId('scenario-back')).toBeDisabled();
+
+    release();
+    // The next step only waits for the panes to show "unavailable", so no button press is needed.
+    await expect(page.getByTestId('scenario-step-1')).toHaveAttribute('data-state', 'done');
+    await expect(page.getByTestId('scenario-complete')).toBeVisible();
+  });
+});
+
+test('New Checkout goes back to the start screen', async ({ page }) => {
   const { chaos } = await startCheckout(page);
 
   await chaos.getByTestId('chaos-reset').click();

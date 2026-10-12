@@ -111,7 +111,9 @@ const sessionFetches = (state: ReturnType<typeof installFakeServer>) =>
 
 const CLIENT: ClientInfo = { clientId: 'pane-1', surface: 'web' };
 
-async function mount(options: { pollMs?: number; client?: ClientInfo; initialState?: ResumeInitialState } = {}) {
+async function mount(
+  options: { pollMs?: number; client?: ClientInfo; initialState?: ResumeInitialState; onRemoteUpdate?: () => void } = {},
+) {
   let n = 0;
   const hook = renderHook(() =>
     useCheckoutSession('s1', { client: CLIENT, newKey: () => `key-${++n}`, ...options }),
@@ -362,6 +364,117 @@ describe('idempotency key per payment attempt', () => {
     await act(() => result.current.complete()); // key-3
 
     expect(completes(server).map((r) => r.key)).toEqual(['key-1', 'key-2', 'key-2', 'key-2', 'key-3']);
+  });
+});
+
+describe('onRemoteUpdate', () => {
+  it('is not called by the first load', async () => {
+    installFakeServer(makeSession());
+    const onRemoteUpdate = vi.fn();
+    await mount({ onRemoteUpdate });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    expect(onRemoteUpdate).not.toHaveBeenCalled();
+  });
+
+  it('is called once for a newer session over the stream, not for a stale or repeated one', async () => {
+    installFakeServer(makeSession());
+    const onRemoteUpdate = vi.fn();
+    await mount({ onRemoteUpdate });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0]!;
+
+    act(() => source.emit('session', makeSession({ version: 1 }))); // the stream's first frame: same version
+    expect(onRemoteUpdate).not.toHaveBeenCalled();
+
+    act(() => source.emit('session', makeSession({ status: 'price_changed', currentPrice: 12000, version: 2 })));
+    expect(onRemoteUpdate).toHaveBeenCalledTimes(1);
+
+    act(() => source.emit('session', makeSession({ status: 'price_changed', currentPrice: 12000, version: 2 })));
+    act(() => source.emit('session', makeSession({ version: 1 })));
+    expect(onRemoteUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('is called for a newer session found by a refocus refetch', async () => {
+    const server = installFakeServer(makeSession());
+    const onRemoteUpdate = vi.fn();
+    const { result } = await mount({ onRemoteUpdate });
+
+    server.session = makeSession({ status: 'expired', version: 2 });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    await waitFor(() => expect(result.current.session?.status).toBe('expired'));
+    expect(onRemoteUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not called for the reply to this pane's own action", async () => {
+    const server = installFakeServer(makeSession());
+    const onRemoteUpdate = vi.fn();
+    const { result } = await mount({ onRemoteUpdate });
+
+    server.complete = () => json(200, makeSession({ status: 'completed', version: 2, idempotencyKey: 'key-1' }));
+    await act(() => result.current.complete());
+
+    expect(result.current.session?.status).toBe('completed');
+    expect(onRemoteUpdate).not.toHaveBeenCalled();
+  });
+
+  it("is not called for the stream's echo of this pane's own action, even if it lands before the reply", async () => {
+    const server = installFakeServer(makeSession());
+    const onRemoteUpdate = vi.fn();
+    const { result } = await mount({ onRemoteUpdate });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0]!;
+
+    const completed = makeSession({ status: 'completed', version: 2, idempotencyKey: 'key-1' });
+    let reply!: () => void;
+    server.complete = () =>
+      new Promise<Response>((resolve) => {
+        reply = () => resolve(json(200, completed));
+      });
+    let paying!: Promise<void>;
+    act(() => {
+      paying = result.current.complete();
+    });
+
+    act(() => source.emit('session', completed)); // the echo, before the reply
+    expect(onRemoteUpdate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      reply();
+      await paying;
+    });
+    expect(onRemoteUpdate).not.toHaveBeenCalled();
+  });
+
+  it('is called again once the own action is done and something else changes the session', async () => {
+    const server = installFakeServer(makeSession());
+    const onRemoteUpdate = vi.fn();
+    const { result } = await mount({ onRemoteUpdate });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0]!;
+
+    server.complete = () => json(200, makeSession({ status: 'payment_pending', version: 2 }));
+    await act(() => result.current.complete());
+    expect(onRemoteUpdate).not.toHaveBeenCalled();
+
+    act(() => source.emit('session', makeSession({ status: 'completed', version: 3 }))); // settled by the server
+    expect(onRemoteUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not called when a pre-rendered state is confirmed, even if the live answer differs', async () => {
+    installFakeServer(makeSession({ status: 'expired', version: 4 }));
+    const onRemoteUpdate = vi.fn();
+    const { result } = await mount({
+      initialState: { session: makeSession({ version: 1 }), listing },
+      onRemoteUpdate,
+    });
+
+    await waitFor(() => expect(result.current.confirmed).toBe(true));
+    expect(result.current.session?.status).toBe('expired');
+    expect(onRemoteUpdate).not.toHaveBeenCalled();
   });
 });
 

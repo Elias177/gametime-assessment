@@ -27,3 +27,9 @@ playwright/.cache/
 .DS_Store
 
 /tmp
+
+# playwright-cli
+.playwright-cli/
+
+# claude
+.claude/

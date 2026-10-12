@@ -79,6 +79,16 @@ export interface DevStatus {
 /** Dev tools (`/api/dev`) exist only when the server runs with DEV_TOOLS=1; otherwise this is a 404. */
 export const getDevStatus = () => call<DevStatus>('/api/dev/status', undefined);
 
+/** Whether the server has dev tools on. False when it doesn't, or can't be reached. */
+export async function devToolsOn(): Promise<boolean> {
+  try {
+    const res = await getDevStatus();
+    return res.ok && res.body.enabled;
+  } catch {
+    return false;
+  }
+}
+
 /** POST to a dev action, e.g. `devAction('price', {listingId, deltaCents})`. No client headers needed. */
 export const devAction = (action: string, body: object = {}) =>
   call<unknown>(`/api/dev/${action}`, undefined, post(body));

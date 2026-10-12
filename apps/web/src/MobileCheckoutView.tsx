@@ -3,6 +3,7 @@ import type { CheckoutSession } from '@checkout/shared';
 import {
   CompletedPanel,
   ConnectionIndicator,
+  DealBanner,
   ListingSummary,
   PriceBlock,
   ProcessingPanel,
@@ -11,6 +12,7 @@ import {
 } from './CheckoutView';
 import type { CheckoutViewProps } from './CheckoutView';
 import { formatCountdown, formatPrice } from './format';
+import { StatusSwap, panelKeyFor } from './Transitions';
 import { useCountdown } from './useCountdown';
 
 export interface MobileCheckoutViewProps extends Omit<CheckoutViewProps, 'resumeUrl'> {
@@ -55,14 +57,18 @@ export function MobileCheckoutView(props: MobileCheckoutViewProps) {
           </p>
         )}
 
+        <DealBanner session={session} />
+
         {alert && (
           <p className="banner error" role="alert" data-testid="error">
             {alert}
           </p>
         )}
 
-        {status === 'payment_pending' && <ProcessingPanel />}
-        {status === 'completed' && <CompletedPanel session={session} paidHere={paidHere} />}
+        <StatusSwap panelKey={panelKeyFor(status)}>
+          {status === 'payment_pending' && <ProcessingPanel />}
+          {status === 'completed' && <CompletedPanel session={session} paidHere={paidHere} />}
+        </StatusSwap>
       </div>
 
       {showPayBar && (

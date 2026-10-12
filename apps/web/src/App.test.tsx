@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { CheckoutSession, Listing, ResumeInitialState } from '@checkout/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
+import { navigate } from './navigate';
 
 const listing: Listing = {
   id: 'l1',
@@ -134,12 +135,71 @@ describe('/checkout/:id split-screen demo', () => {
   });
 });
 
+describe('moving to another checkout', () => {
+  it('keeps the dev drawer (open, on its tab) but starts the panes over', async () => {
+    open('/checkout/s1', session.originClientId, true);
+    const drawer = await screen.findByTestId('dev-drawer');
+    await waitFor(() => expect(drawer.hasAttribute('hidden')).toBe(false));
+    fireEvent.click(screen.getByTestId('dev-tab-scenarios'));
+    const phoneBefore = screen.getByTestId('phone-pane');
+
+    act(() => navigate('/checkout/s2'));
+
+    await waitFor(() => expect(screen.getByTestId('phone-pane')).not.toBe(phoneBefore)); // new panes
+    expect(screen.getByTestId('dev-drawer')).toBe(drawer); // the same drawer
+    expect(drawer.getAttribute('data-open')).toBe('true');
+    expect(screen.getByTestId('dev-tab-scenarios').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('scenarios')).toBeTruthy();
+  });
+
+  it('gives the new panes a new phone device', async () => {
+    open('/checkout/s1');
+    await screen.findByTestId('phone-pane');
+    await waitFor(() => expect(requests.some((r) => r.surface === 'mobile')).toBe(true));
+    const firstPhoneId = requests.find((r) => r.surface === 'mobile')!.clientId;
+
+    act(() => navigate('/checkout/s2'));
+
+    await waitFor(() => expect(requests.some((r) => r.surface === 'mobile' && r.clientId !== firstPhoneId)).toBe(true));
+  });
+});
+
+describe('pane captions', () => {
+  it('names each device under its pane in the split demo', async () => {
+    open('/checkout/s1');
+
+    const desktop = await screen.findByTestId('desktop-pane');
+    const phone = screen.getByTestId('phone-pane');
+    expect(desktop.parentElement!.querySelector('.pane-caption')!.textContent).toContain('Desktop');
+    expect(phone.parentElement!.querySelector('.pane-caption')!.textContent).toContain('Phone');
+    expect(phone.getAttribute('aria-label')).toBe('Phone preview');
+  });
+
+  it('has none on /resume, which is a single real device', async () => {
+    open('/resume/s1');
+    await screen.findByTestId('origin-label');
+
+    expect(document.querySelector('.pane-caption')).toBeNull();
+  });
+});
+
 describe('chaos panel placement', () => {
   it('shows under the split demo when the server has dev tools on', async () => {
     open('/checkout/s1', session.originClientId, true);
 
     expect(await screen.findByTestId('chaos-panel')).toBeTruthy();
-    expect(screen.getByTestId('chaos-behavior').textContent).toBe('Next payment: succeed');
+    expect(screen.getByTestId('chaos-behavior-succeed').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('lives in an always-open drawer on a wide screen, showing the next-payment behavior', async () => {
+    open('/checkout/s1', session.originClientId, true);
+
+    const drawer = await screen.findByTestId('dev-drawer');
+    await waitFor(() => expect(drawer.hasAttribute('hidden')).toBe(false));
+    expect(drawer.getAttribute('data-open')).toBe('true');
+    expect(screen.queryByTestId('chaos-toggle')).toBeNull();
+    expect(screen.getByTestId('drawer-behavior').textContent).toBe('succeed');
+    expect(drawer.contains(screen.getByTestId('chaos-panel'))).toBe(true);
   });
 
   it('is absent when the server has dev tools off', async () => {
@@ -148,6 +208,7 @@ describe('chaos panel placement', () => {
     await waitFor(() => expect(requests.some((r) => r.path === '/api/dev/status')).toBe(true));
 
     expect(screen.queryByTestId('chaos-panel')).toBeNull();
+    expect((screen.getByTestId('dev-drawer') as HTMLElement).hasAttribute('hidden')).toBe(true);
   });
 
   it('is not on /resume, which does not even ask for it', async () => {
@@ -155,16 +216,18 @@ describe('chaos panel placement', () => {
     await screen.findByTestId('origin-label');
 
     expect(screen.queryByTestId('chaos-panel')).toBeNull();
+    expect(screen.queryByTestId('dev-drawer')).toBeNull();
     expect(requests.some((r) => r.path.startsWith('/api/dev/'))).toBe(false);
   });
 });
 
 describe('event log placement', () => {
-  it('shows under the chaos panel when the server has dev tools on', async () => {
+  it('shows in the drawer, after the chaos panel, when the server has dev tools on', async () => {
     open('/checkout/s1', session.originClientId, true);
 
     const log = await screen.findByTestId('event-log');
     const chaos = screen.getByTestId('chaos-panel');
+    expect(screen.getByTestId('dev-drawer').contains(log)).toBe(true);
     expect(chaos.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(requests.some((r) => r.path === '/api/dev/events')).toBe(true);
   });
