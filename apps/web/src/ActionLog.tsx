@@ -1,10 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Chaos } from './ChaosPanel';
-import type { PaneControls, PaneName, PaneOp, PaneStatus } from './paneControls';
+import type { PaneControls, PaneName, PaneOp, PaneStatus, PayOutcome } from './paneControls';
 
 const PANES: readonly PaneName[] = ['desktop', 'phone'];
 const PANE_LABEL: Record<PaneName, string> = { desktop: 'Desktop', phone: 'Phone' };
 const OP_TEXT: Record<PaneOp, string> = { pay: 'pressed Pay', 'accept-price': 'accepted the new price' };
+/** How a Pay press ended, for when both devices pay at once. */
+const OUTCOME_TEXT: Record<PayOutcome, string> = {
+  accepted: 'its payment was accepted first',
+  rejected: 'rejected, the other device was already paying',
+};
 /** What a pane moving to a status means, in words a person would use. */
 const STATUS_TEXT: Record<PaneStatus, string> = {
   active: 'is ready to pay again',
@@ -78,7 +83,9 @@ export function ActionLog({ controls, chaos }: { controls: PaneControls; chaos: 
         if (status && before) add(name, STATUS_TEXT[status]);
       }
     });
-    const stopAction = controls.onAction((name, op) => add(name, OP_TEXT[op]));
+    const stopAction = controls.onAction((name, op, outcome) =>
+      add(name, outcome ? `${OP_TEXT[op]}: ${OUTCOME_TEXT[outcome]}` : OP_TEXT[op]),
+    );
     // A note already names who did it ("Dev tools raised the price by $12").
     const stopNote = controls.onNote((text) => add('dev', text));
     return () => {

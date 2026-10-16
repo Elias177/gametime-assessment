@@ -590,3 +590,11 @@ Taller bar, 44px menu button, truncating title; CSS only.
 Checked the README against this log and fixed what had drifted (drawer location and title, New Checkout name, action log, QR, deal banner, scenario behavior); condensed Task 17 onward into one-liners. Docs only.
 
 **Latest full runs:** unit tests shared 100, server 140, web 337; e2e 35 (before the last two CSS-only navbar changes, which were not re-run).
+
+## Fix: action log names the winner and loser of the pay race
+**Asked:** When both devices pay at once, the action log did not say which device won the race and which failed.
+**Root cause:** The log only heard "pressed Pay" and status changes. `useCheckoutSession.complete()` discarded the server's reply after `settle(res)`, so the loser's 409 `PAYMENT_IN_PROGRESS`/`VERSION_CONFLICT` (or 200 with `completedElsewhere`) never reached the log, and both panes showed the same statuses.
+**Change:** `complete()` now returns `'accepted' | 'rejected'` (`PayOutcome`). `CheckoutPane` passes it to `reportAction(name, op, outcome)`, and `ActionLog` words it: "pressed Pay: its payment was accepted first" / "pressed Pay: rejected, the other device was already paying". Other actions and a pay with no outcome (network error, 402) are logged as before.
+**Tests added:** ActionLog wording for both outcomes; `complete()` outcome for accepted, 409 and `completedElsewhere`. Updated `paneControls.test.ts` for the new third argument.
+**Results:** typecheck clean; unit tests server 140, web 341 pass. e2e not re-run (no spec asserts the old text).
+**Next:** not started; waiting for the next ask.

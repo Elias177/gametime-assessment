@@ -84,6 +84,17 @@ describe('ActionLog', () => {
     ]);
   });
 
+  it('says which device won the pay race and which was rejected', () => {
+    const controls = createPaneControls();
+    render(<ActionLog controls={controls} chaos={stubChaos()} />);
+    act(() => controls.reportAction('desktop', 'pay', 'accepted'));
+    act(() => controls.reportAction('phone', 'pay', 'rejected'));
+    expect(entries()).toEqual([
+      '1.Desktop pressed Pay: its payment was accepted first',
+      '2.Phone pressed Pay: rejected, the other device was already paying',
+    ]);
+  });
+
   it('does not log a pane opening, or show times', () => {
     const controls = createPaneControls();
     const { container } = render(<ActionLog controls={controls} chaos={stubChaos()} />);

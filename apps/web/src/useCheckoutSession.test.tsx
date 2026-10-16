@@ -434,7 +434,7 @@ describe('onRemoteUpdate', () => {
       new Promise<Response>((resolve) => {
         reply = () => resolve(json(200, completed));
       });
-    let paying!: Promise<void>;
+    let paying!: Promise<unknown>;
     act(() => {
       paying = result.current.complete();
     });
@@ -491,6 +491,43 @@ describe('acknowledge', () => {
 
     expect(server.requests.find((r) => r.path.endsWith('/acknowledge'))?.body).toEqual({ version: 2 });
     expect(result.current.session).toMatchObject({ status: 'active', priceSnapshot: 12000, version: 3 });
+  });
+});
+
+describe('complete outcome', () => {
+  it("is 'accepted' when the payment is taken", async () => {
+    const server = installFakeServer(makeSession());
+    const { result } = await mount();
+    server.complete = () => json(200, makeSession({ status: 'completed', version: 4, orderId: 'order-1', idempotencyKey: 'key-1' }));
+    let outcome;
+    await act(async () => {
+      outcome = await result.current.complete();
+    });
+    expect(outcome).toBe('accepted');
+  });
+
+  it("is 'rejected' when the other device's payment is in progress", async () => {
+    const server = installFakeServer(makeSession());
+    const { result } = await mount();
+    server.complete = () =>
+      json(409, { error: { code: 'PAYMENT_IN_PROGRESS', message: 'in progress' }, session: makeSession({ status: 'payment_pending', version: 3 }) });
+    let outcome;
+    await act(async () => {
+      outcome = await result.current.complete();
+    });
+    expect(outcome).toBe('rejected');
+  });
+
+  it("is 'rejected' when /complete answers completedElsewhere", async () => {
+    const server = installFakeServer(makeSession());
+    const { result } = await mount();
+    server.complete = () =>
+      json(200, { ...makeSession({ status: 'completed', version: 4, orderId: 'order-1', idempotencyKey: 'phone-key' }), completedElsewhere: true });
+    let outcome;
+    await act(async () => {
+      outcome = await result.current.complete();
+    });
+    expect(outcome).toBe('rejected');
   });
 });
 

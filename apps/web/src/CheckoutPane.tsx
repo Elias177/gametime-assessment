@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createSession, devAction, devToolsOn } from './api';
-import type { PaneControls, PaneHandle, PaneName, PaneOp } from './paneControls';
+import type { PaneControls, PaneHandle, PaneName, PaneOp, PayOutcome } from './paneControls';
 import type { ResumeInitialState } from '@checkout/shared';
 import type { ClientInfo } from './api';
 import { CheckoutView } from './CheckoutView';
@@ -43,11 +43,11 @@ export function CheckoutPane({
    * it was started (a click on the button, or a scenario), so a scenario can tell that a person did
    * a step themselves.
    */
-  const run = (action: () => Promise<void>, op?: PaneOp) => async () => {
+  const run = (action: () => Promise<PayOutcome | void>, op?: PaneOp) => async () => {
     setBusy(true);
     try {
-      await action();
-      if (op && controls && paneName) controls.reportAction(paneName, op);
+      const outcome = await action();
+      if (op && controls && paneName) controls.reportAction(paneName, op, outcome || undefined);
     } finally {
       setBusy(false);
     }

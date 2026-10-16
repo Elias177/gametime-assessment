@@ -4,6 +4,11 @@ export type PaneName = 'desktop' | 'phone';
 /** What a scenario can do on a pane: the same two actions a person has on its buttons. */
 export type PaneOp = 'pay' | 'accept-price';
 export type PaneStatus = CheckoutSession['status'];
+/**
+ * How a Pay press ended when two devices pay at once: this pane's payment was taken up by the server
+ * ('accepted'), or the other device's payment got there first ('rejected').
+ */
+export type PayOutcome = 'accepted' | 'rejected';
 
 export interface PaneHandle {
   pay(): Promise<void>;
@@ -26,9 +31,9 @@ export interface PaneControls {
    * A pane finished an action: pressed by a person or done by `perform`, it reports both the same
    * way. (A listener that only cares about a person's presses ignores them while it is performing.)
    */
-  reportAction(name: PaneName, op: PaneOp): void;
+  reportAction(name: PaneName, op: PaneOp, outcome?: PayOutcome): void;
   /** Hear every reported action. Returns the function that stops listening. */
-  onAction(listener: (name: PaneName, op: PaneOp) => void): () => void;
+  onAction(listener: (name: PaneName, op: PaneOp, outcome?: PayOutcome) => void): () => void;
   /** Something happened that is not a pane's own action (a dev tools button), described in words. */
   reportNote(text: string): void;
   /** Hear every note. Returns the function that stops listening. */
@@ -43,7 +48,7 @@ export function createPaneControls(): PaneControls {
   const handles = new Map<PaneName, PaneHandle>();
   const statuses = new Map<PaneName, PaneStatus | undefined>();
   const listeners = new Set<() => void>();
-  const actionListeners = new Set<(name: PaneName, op: PaneOp) => void>();
+  const actionListeners = new Set<(name: PaneName, op: PaneOp, outcome?: PayOutcome) => void>();
   const noteListeners = new Set<(text: string) => void>();
 
   return {
@@ -65,8 +70,8 @@ export function createPaneControls(): PaneControls {
       await (op === 'pay' ? handle.pay() : handle.acceptPrice());
     },
 
-    reportAction(name, op) {
-      for (const listener of [...actionListeners]) listener(name, op);
+    reportAction(name, op, outcome) {
+      for (const listener of [...actionListeners]) listener(name, op, outcome);
     },
 
     onAction(listener) {

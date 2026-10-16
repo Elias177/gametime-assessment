@@ -74,7 +74,7 @@ describe('createPaneControls', () => {
       controls.reportAction('phone', 'pay');
       controls.reportAction('desktop', 'accept-price');
 
-      expect(a.mock.calls).toEqual([['phone', 'pay'], ['desktop', 'accept-price']]);
+      expect(a.mock.calls).toEqual([['phone', 'pay', undefined], ['desktop', 'accept-price', undefined]]);
       expect(b.mock.calls).toEqual(a.mock.calls);
     });
 

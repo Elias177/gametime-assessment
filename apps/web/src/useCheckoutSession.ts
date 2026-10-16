@@ -4,6 +4,7 @@ import type { CheckoutSession, Listing, ResumeInitialState } from '@checkout/sha
 import { acknowledgeSession, completeSession, eventsUrl, getListing, getSession } from './api';
 import type { ApiError, ApiResult, ClientInfo } from './api';
 import { randomUuid } from './clientId';
+import type { PayOutcome } from './paneControls';
 
 export type Connection = 'connecting' | 'sse' | 'polling';
 
@@ -226,7 +227,7 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
    * charge. Only a definitive 402 PAYMENT_FAILED ends the attempt; the next click is a new one.
    * The `version` always comes from the freshest session, so a 409 only updates the version.
    */
-  const complete = useCallback(async () => {
+  const complete = useCallback(async (): Promise<PayOutcome | undefined> => {
     const current = sessionRef.current;
     if (!current) return;
     const key = (attemptKeyRef.current ??= (optionsRef.current.newKey ?? (randomUuid))());
@@ -237,6 +238,10 @@ export function useCheckoutSession(id: string, options: UseCheckoutSessionOption
         attemptKeyRef.current = undefined;
       }
       settle(res);
+      // Racing another device: the server tells the loser it was too late, by a 409 (a payment in
+      // progress, or a stale version) or by the finished order marked as completed elsewhere.
+      if (res.ok) return res.body.completedElsewhere ? 'rejected' : 'accepted';
+      if (res.status === 409) return 'rejected';
     } catch {
       setError(NETWORK_ERROR);
     } finally {
